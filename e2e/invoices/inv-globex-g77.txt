@@ -1,0 +1,7 @@
+Globex Logistics
+Invoice: G-77
+From: Globex Logistics
+Shipment 4471, Rotterdam to Hamburg
+Due date: 2026-12-01
+Total: 80.50 tUSD8
+Wallet: __GLOBEX__

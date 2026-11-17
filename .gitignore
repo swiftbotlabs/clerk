@@ -1,0 +1,8 @@
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+e2e/work/
+e2e/reports/
+__pycache__/
+.env
+*.keystore

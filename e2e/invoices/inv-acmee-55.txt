@@ -1,0 +1,6 @@
+Acme Supplies Limited Co
+Invoice No: AS-55
+From: Acme Suppiles Ltd
+Due date: 2026-12-03
+Amount due: 40.00 tUSD8
+Pay to: __ACME__

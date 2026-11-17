@@ -1,0 +1,6 @@
+ACME SUPPLIES LTD
+Invoice No: INV-1003
+From: Acme Supplies Ltd
+Due date: 2026-12-10
+Amount due: 650.00 tUSD8
+Pay to: __ACME__
