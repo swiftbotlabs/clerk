@@ -50,10 +50,32 @@ h2{font-size:20px;margin:40px 0 4px}h2+p{color:var(--muted);margin:0 0 14px;font
 <h2>Stopped</h2><p>These failed a rule the clerk can't override.</p><section id="stop"></section>
 </main>
 <script type="module">
-import { createWalletClient, createPublicClient, custom, http, parseAbi, formatUnits } from 'https://esm.sh/viem@2.21.0';
+import { createWalletClient, createPublicClient, custom, http, parseAbi, formatUnits, encodeFunctionData, encodePacked } from 'https://esm.sh/viem@2.21.0';
 const ABI = parseAbi([
   'function runs(uint256) view returns (uint8 status, address stagedBy, uint64 stagedAt, uint128 total, uint32 lineCount)',
   'function execute(uint256 runId)', 'function reject(uint256 runId, string reason)', 'function owner() view returns (address)']);
+// The owner may be an ERC-4337 smart account (Kernel v3.1 on Aevum): then the connected wallet is its signing key, signs a
+// UserOperation, and submits it to Aevum's EntryPoint v0.7 itself.
+const EP = '0x0000000071727De22E5E9d8BAf0edAc6f37da032';
+const OP = '(address sender,uint256 nonce,bytes initCode,bytes callData,bytes32 accountGasLimits,uint256 preVerificationGas,bytes32 gasFees,bytes paymasterAndData,bytes signature)';
+const EP_ABI = parseAbi([`function getUserOpHash(${OP} op) view returns (bytes32)`, 'function getNonce(address sender, uint192 key) view returns (uint256)',
+  `function handleOps(${OP}[] ops, address beneficiary)`]);
+const KERNEL_ABI = parseAbi(['function execute(bytes32 mode, bytes executionCalldata)']);
+const OP_EVENT = '0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f'; // UserOperationEvent
+async function viaSmartAccount(owner, inner) {
+  const callData = encodeFunctionData({ abi: KERNEL_ABI, functionName: 'execute', args: ['0x' + '00'.repeat(32),
+    encodePacked(['address', 'uint256', 'bytes'], [report.payrun, 0n, inner])] });
+  const nonce = await pub().readContract({ address: EP, abi: EP_ABI, functionName: 'getNonce', args: [owner, 0n] });
+  const op = { sender: owner, nonce, initCode: '0x', callData, accountGasLimits: encodePacked(['uint128', 'uint128'], [600000n, 600000n]),
+    preVerificationGas: 60000n, gasFees: encodePacked(['uint128', 'uint128'], [1000000000n, 1000000000n]), paymasterAndData: '0x', signature: '0x' };
+  const userOpHash = await pub().readContract({ address: EP, abi: EP_ABI, functionName: 'getUserOpHash', args: [op] });
+  op.signature = await wallet.signMessage({ account, message: { raw: userOpHash } });
+  const hash = await wallet.writeContract({ account, chain: null, address: EP, abi: EP_ABI, functionName: 'handleOps', args: [[op], account], type: 'legacy' });
+  const rc = await pub().waitForTransactionReceipt({ hash });
+  const ev = rc.logs.find((l) => l.topics[0] === OP_EVENT);
+  if (!ev || BigInt('0x' + ev.data.slice(2 + 64, 2 + 128)) !== 1n) throw new Error('the smart account refused the call (nothing was paid)');
+  return hash;
+}
 const CHAINS = { 44005: { name: 'Aevum testnet', rpc: 'https://rpc-test.qday.info', explorer: 'https://explorer-test.qday.info' },
                  440050: { name: 'Aevum fork (local)', rpc: 'http://127.0.0.1:8555', explorer: null } };
 const STATUS = ['', 'Waiting for your approval', 'Paid', 'Rejected'];
@@ -117,8 +139,15 @@ document.addEventListener('click', async (ev) => {
   try {
     const args = b.dataset.act === 'reject' ? [id, prompt('Why are you rejecting this run?') || 'rejected by the owner'] : [id];
     out.textContent = b.dataset.act === 'execute' ? 'Paying… confirm in your wallet.' : 'Rejecting… confirm in your wallet.';
-    const hash = await wallet.writeContract({ account, chain: null, address: report.payrun, abi: ABI, functionName: b.dataset.act, args, type: 'legacy' });
-    await pub().waitForTransactionReceipt({ hash });
+    const owner = await pub().readContract({ address: report.payrun, abi: ABI, functionName: 'owner' });
+    let hash;
+    if ((await pub().getBytecode({ address: owner }))?.length > 2) {   // smart-account owner: sign a UserOperation
+      out.textContent += ' (signing for the smart account ' + short(owner) + ')';
+      hash = await viaSmartAccount(owner, encodeFunctionData({ abi: ABI, functionName: b.dataset.act, args }));
+    } else {
+      hash = await wallet.writeContract({ account, chain: null, address: report.payrun, abi: ABI, functionName: b.dataset.act, args, type: 'legacy' });
+      await pub().waitForTransactionReceipt({ hash });
+    }
     const ex = CHAINS[chainId]?.explorer;
     notes[b.dataset.run] = (b.dataset.act === 'execute' ? 'Paid. ' : 'Rejected. ') + (ex ? `<a href="${ex}/tx/${hash}" target="_blank" rel="noopener">View transaction</a>` : 'Transaction ' + esc(hash));
     await render();
