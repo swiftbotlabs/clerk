@@ -61,6 +61,7 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '';
 const money = (u) => Number(formatUnits(BigInt(u), 6)).toLocaleString('en', { minimumFractionDigits: 2 }) + ' tUSD8';
+const notes = {};   // runId -> what happened to the owner's last action (kept across re-renders)
 let report, wallet, account, chainId = Number(new URLSearchParams(location.search).get('chain') || 44005);
 const pub = () => createPublicClient({ transport: http(CHAINS[chainId].rpc) });
 
@@ -81,17 +82,19 @@ async function render() {
   const byRun = {};
   for (const it of items) if (it.run_id) (byRun[it.run_id] ||= []).push(it);
   const ids = Object.keys(byRun);
-  $('#headline').textContent = ids.length ? (ids.length === 1 ? 'One pay run is waiting for you' : `${ids.length} pay runs are waiting for you`) : 'Nothing to approve';
-  const parts = [];
+  const parts = []; let waiting = 0;
   for (const id of ids) {
     let st = 1;
     try { st = Number((await pub().readContract({ address: report.payrun, abi: ABI, functionName: 'runs', args: [BigInt(id)] }))[0]); } catch {}
+    if (st === 1) waiting++;
     const total = byRun[id].reduce((s, i) => s + BigInt(i.units), 0n);
     parts.push(`<article class="run ${st === 2 ? 'done' : ''}" data-run="${id}"><div class="runhead"><div><div class="status">Run ${id}: ${STATUS[st] || 'Unknown'}</div>
       <div class="total">${money(total)}<small>${byRun[id].length} invoice${byRun[id].length > 1 ? 's' : ''}</small></div></div>
       <div class="actions">${st === 1 ? `<button class="pay" data-act="execute" data-run="${id}">Approve and pay</button><button data-act="reject" data-run="${id}">Reject</button>` : ''}</div></div>
-      ${byRun[id].map(slip).join('')}<div class="slip status" id="tx-${id}" hidden></div></article>`);
+      ${byRun[id].map(slip).join('')}<div class="slip status" id="tx-${id}" ${notes[id] ? '' : 'hidden'}>${notes[id] || ''}</div></article>`);
   }
+  $('#headline').textContent = waiting === 0 ? (ids.length ? 'Nothing is waiting for you' : 'Nothing to approve')
+    : waiting === 1 ? 'One pay run is waiting for you' : `${waiting} pay runs are waiting for you`;
   $('#runs').innerHTML = parts.join('') || '<p class="empty">The clerk staged nothing this time.</p>';
   const other = (dec) => items.filter((i) => i.decision === dec || (dec === 'HOLD' && i.decision === 'PAYABLE' && i.skip && !i.run_id && i.skip.startsWith('over')));
   const card = (i, cls, label) => `<div class="item"><span class="verdict ${cls}">${label}</span><strong>${esc(i.proposed.vendor || i.file)}</strong>
@@ -117,7 +120,7 @@ document.addEventListener('click', async (ev) => {
     const hash = await wallet.writeContract({ account, chain: null, address: report.payrun, abi: ABI, functionName: b.dataset.act, args, type: 'legacy' });
     await pub().waitForTransactionReceipt({ hash });
     const ex = CHAINS[chainId]?.explorer;
-    out.innerHTML = (b.dataset.act === 'execute' ? 'Paid. ' : 'Rejected. ') + (ex ? `<a href="${ex}/tx/${hash}" target="_blank" rel="noopener">View transaction</a>` : esc(hash));
+    notes[b.dataset.run] = (b.dataset.act === 'execute' ? 'Paid. ' : 'Rejected. ') + (ex ? `<a href="${ex}/tx/${hash}" target="_blank" rel="noopener">View transaction</a>` : 'Transaction ' + esc(hash));
     await render();
   } catch (e) { out.textContent = 'Not sent: ' + (e.shortMessage || e.message || e); }
 });
