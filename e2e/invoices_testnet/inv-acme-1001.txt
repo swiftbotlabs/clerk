@@ -1,0 +1,9 @@
+ACME SUPPLIES LTD
+Invoice No: INV-1001
+From: Acme Supplies Ltd
+Bill to: Swift Bot Labs
+Date: 2026-11-15
+Due date: 2026-11-30
+Item: 1 x printer toner, 1.20
+Amount due: 1.20 tUSD8
+Pay to: __ACME__
