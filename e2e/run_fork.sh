@@ -12,7 +12,7 @@ K4=0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a   # mallor
 A() { cast wallet address "$1"; }
 OWNER=$(A $K0); CLERK=$(A $K1); ACME=$(A $K2); GLOBEX=$(A $K3); MALLORY=$(A $K4)
 anvil --fork-url https://rpc-test.qday.info --hardfork shanghai --port 8555 --chain-id 440050 --silent & AP=$!
-trap 'kill $AP 2>/dev/null' EXIT
+[ -n "${KEEP_ANVIL:-}" ] || trap 'kill $AP 2>/dev/null' EXIT
 until cast block-number --rpc-url $F >/dev/null 2>&1; do sleep 0.5; done
 for a in $OWNER $CLERK $ACME $GLOBEX $MALLORY; do cast rpc anvil_setBalance $a 0x8AC7230489E80000 --rpc-url $F >/dev/null; done   # 10 tQDAY each (fork only)
 reg() {  # register a vendor identity with an inline registration file; print its agentId (the minted tokenId)
@@ -34,6 +34,7 @@ export AEVUM_RPC=$F CLERK_KEY=$K1
 python3 ../agent/stage.py stage --invoices work --vendors $ACME_ID,$GLOBEX_ID --payrun $PAYRUN --account env:CLERK_KEY --out reports/report.json
 echo "--- second pass (idempotency: nothing may be staged twice)"
 python3 ../agent/stage.py stage --invoices work --vendors $ACME_ID,$GLOBEX_ID --payrun $PAYRUN --account env:CLERK_KEY --out reports/report2.json
+[ -n "${STOP_BEFORE_EXEC:-}" ] && { echo "stopped before execution (PayRun $PAYRUN)"; exit 0; }
 echo "--- the clerk tries to execute its own run"
 cast send --legacy --private-key $K1 $PAYRUN "execute(uint256)" 1 --rpc-url $F 2>&1 | grep -o "NotOwner\|0x30cd7471\|revert[^\n]*" | head -1 || true
 echo "--- owner executes run 1 (treasury tUSD8 from a fork-only balance write)"

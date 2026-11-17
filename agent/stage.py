@@ -37,6 +37,7 @@ RPC = os.environ.get("AEVUM_RPC", "https://rpc-test.qday.info")
 REGISTRY = os.environ.get("AEVUM_REGISTRY", "0xF45E7f39Caba1d2055f613970575a7e7069636Be")
 DECIMALS = 6  # tUSD8
 LINE_TUPLE = "(uint256,address,uint128,bytes32,bytes32)[]"
+STAGED_TOPIC = "0x8400e17d532706ea458bde53c28cd26ebffe99def46f75abf218ce1c94d8b099"
 
 
 # ------------------------------------------------------------------------------------------------ chain (cast)
@@ -165,6 +166,22 @@ class Planned:
     warnings: list[str] = field(default_factory=list)
     units: int = 0
     skip: str | None = None  # already paid / already staged
+    evidence: dict = field(default_factory=dict)
+    run_id: int | None = None
+
+
+def evidence(text: str, line: dict) -> dict:
+    """The source line behind each proposed value, for the approval page (the owner sees WHERE each number came from)."""
+    out = {}
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    for key in ("vendor", "amount", "reference", "due_date", "wallet"):
+        val = str(line.get(key) or "").strip()
+        if not val:
+            continue
+        probe = val.lower().replace(",", "")
+        hit = next((l for l in lines if probe in l.lower().replace(",", "")), None)
+        out[key] = hit[:160] if hit else None
+    return out
 
 
 def to_units(amount: str) -> int:
@@ -186,7 +203,8 @@ def plan(chain: Chain, payrun: str | None, invoices: list[Path], directory: Dire
         v: Verdict = check_line(text, line, directory.registry)
         h = keccak(raw)
         item = Planned(p.name, h, line, v.decision, v.cop, v.registered_name,
-                       directory.ids.get(v.registered_name) if v.registered_name else None, v.reasons, v.warnings)
+                       directory.ids.get(v.registered_name) if v.registered_name else None, v.reasons, v.warnings,
+                       evidence=evidence(text, line))
         if v.decision == "PAYABLE":
             item.units = to_units(line["amount"])
             if payrun:
@@ -239,7 +257,10 @@ def stage_runs(chain: Chain, payrun: str, account: str, session_addr: str, runs:
             continue
         try:
             receipt = chain.send(account, payrun, f"stage({LINE_TUPLE})", arg)
-            results.append({"files": [i.file for i in run], "status": "staged", "tx": receipt.get("transactionHash")})
+            run_id = next((int(l["topics"][1], 16) for l in receipt.get("logs", []) if l["topics"][0].lower() == STAGED_TOPIC), None)
+            for i in run:
+                i.run_id = run_id
+            results.append({"files": [i.file for i in run], "status": "staged", "run_id": run_id, "tx": receipt.get("transactionHash")})
         except ChainError as e:
             # idempotency: did it land anyway?
             landed = int(chain.call(payrun, "stagedInRun(bytes32)(uint256)", run[0].invoice_hash).split()[0])
