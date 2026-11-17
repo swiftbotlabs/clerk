@@ -72,5 +72,26 @@ class T(unittest.TestCase):
         self.assertIn(date(2026, 11, 17), dates_in("Due: Nov 17, 2026"))
 
 
+
+
+class LookalikeNames(unittest.TestCase):
+    def test_lookalike_vendor_name_holds_even_when_the_header_matches(self):
+        reg = Registry({"Acme Supplies Ltd": "0x" + "a" * 40})
+        src = ("Acme Supplies Limited Co\nInvoice No: AS-55\nFrom: Acme Suppiles Ltd\nDue date: 2026-12-03\n"
+               "Amount due: 40.00 tUSD8\nPay to: 0x" + "a" * 40)
+        line = {"vendor": "Acme Supplies Limited Co", "wallet": "0x" + "a" * 40, "amount": "40.00", "currency": "tUSD8",
+                "reference": "AS-55", "due_date": "2026-12-03"}
+        v = check_line(src, line, reg)
+        self.assertEqual(v.decision, "HOLD")
+        self.assertFalse(v.checks["no_lookalike_vendor_names"])
+
+    def test_clean_invoice_has_no_lookalike_flag(self):
+        reg = Registry({"Acme Supplies Ltd": "0x" + "a" * 40})
+        src = "ACME SUPPLIES LTD\nInvoice No: INV-9\nFrom: Acme Supplies Ltd\nDue date: 2026-12-03\nAmount due: 10.00 tUSD8\nPay to: 0x" + "a" * 40
+        line = {"vendor": "Acme Supplies Ltd", "wallet": "0x" + "a" * 40, "amount": "10.00", "currency": "tUSD8",
+                "reference": "INV-9", "due_date": "2026-12-03"}
+        self.assertEqual(check_line(src, line, reg).decision, "PAYABLE")
+
+
 if __name__ == "__main__":
     unittest.main()

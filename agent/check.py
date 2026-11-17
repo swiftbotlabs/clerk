@@ -138,6 +138,19 @@ def check_line(source: str, line: dict, registry: Registry) -> Verdict:
     if INJECTION_HINTS.search(source):
         warnings.append("the document contains instruction-like text; it was treated as data")
 
+    # Look-alike names: an invoice that also names a near-copy of the registered vendor ("Acme Suppiles Ltd") is a classic
+    # impersonation tell, whichever name the model picked. Any such line holds the payment for a human.
+    if reg_name and cop == "MATCH":
+        target = norm_name(reg_name)
+        for raw in source.splitlines():
+            for cand in [raw.split(":", 1)[1] if ":" in raw else raw]:   # a labelled line: judge only the value
+                c = norm_name(cand)
+                if c and c != target and difflib.SequenceMatcher(None, c, target).ratio() >= 0.8:
+                    checks["no_lookalike_vendor_names"] = False
+                    warnings.append(f"the invoice also names '{cand.strip()[:60]}', a near-copy of the registered '{reg_name}'")
+                    break
+        checks.setdefault("no_lookalike_vendor_names", True)
+
     for k, ok in checks.items():
         if not ok:
             reasons.append(k.replace("_", " ") + ": failed")

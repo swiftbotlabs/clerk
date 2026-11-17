@@ -32,9 +32,9 @@ cast send --legacy --private-key $K0 $PAYRUN "grantSession(address,uint64,uint12
 # fill the invoice fixtures with the fork's addresses
 rm -rf work reports && mkdir work reports && for f in invoices/*.txt; do sed "s/__ACME__/$ACME/; s/__GLOBEX__/$GLOBEX/; s/__MALLORY__/$MALLORY/g" $f > work/$(basename $f); done
 export AEVUM_RPC=$F CLERK_KEY=$K1
-python3 ../agent/stage.py stage --invoices work --vendors $ACME_ID,$GLOBEX_ID --payrun $PAYRUN --account env:CLERK_KEY --out reports/report.json
+python3 ../agent/stage.py stage --invoices work --vendors $ACME_ID,$GLOBEX_ID --payrun $PAYRUN --account env:CLERK_KEY --extractor ${EXTRACTOR:-rules} --out reports/report.json
 echo "--- second pass (idempotency: nothing may be staged twice)"
-python3 ../agent/stage.py stage --invoices work --vendors $ACME_ID,$GLOBEX_ID --payrun $PAYRUN --account env:CLERK_KEY --out reports/report2.json
+python3 ../agent/stage.py stage --invoices work --vendors $ACME_ID,$GLOBEX_ID --payrun $PAYRUN --account env:CLERK_KEY --extractor ${EXTRACTOR:-rules} --out reports/report2.json
 [ -n "${STOP_BEFORE_EXEC:-}" ] && { echo "stopped before execution (PayRun $PAYRUN)"; exit 0; }
 echo "--- the clerk tries to execute its own run"
 cast send --legacy --private-key $K1 $PAYRUN "execute(uint256)" 1 --rpc-url $F 2>&1 | grep -o "NotOwner\|0x30cd7471\|revert[^\n]*" | head -1 || true
