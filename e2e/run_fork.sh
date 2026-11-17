@@ -26,6 +26,7 @@ cd ../contracts
 PAYRUN=$(forge create --legacy --broadcast --json --rpc-url $F --private-key $K0 src/PayRun.sol:PayRun --constructor-args $TUSD $REG $OWNER $OWNER | python3 -c 'import json,sys; r=json.load(sys.stdin); r=r.get("data") or r; print(r["deployedTo"])')
 cd ../e2e
 echo "PayRun $PAYRUN"
+DEPLOY_BLOCK=$(cast block-number --rpc-url $F)
 NOW=$(cast block latest --field timestamp --rpc-url $F | tr -d "[:space:]")
 cast send --legacy --private-key $K0 $PAYRUN "grantSession(address,uint64,uint128,uint128)" $CLERK $((NOW+7*86400)) 500000000 800000000 --rpc-url $F >/dev/null
 # fill the invoice fixtures with the fork's addresses
@@ -51,6 +52,9 @@ if [ -n "$SLOT" ]; then
   a0=$(bal $ACME); g0=$(bal $GLOBEX); m0=$(bal $MALLORY)
   cast send --legacy --private-key $K0 $PAYRUN "execute(uint256)" 1 --rpc-url $F >/dev/null && echo executed
   echo "received (tUSD8 units): Acme +$(( $(bal $ACME) - a0 ))  Globex +$(( $(bal $GLOBEX) - g0 ))  Mallory +$(( $(bal $MALLORY) - m0 ))"
+  echo "--- reconcile Paid events against the ledger (INV-1002 is the redirect attempt: it must show UNPAID)"
+  printf 'reference,agent_id,amount\nINV-1001,%s,120.00\nG-77,%s,80.50\nINV-1002,%s,95.00\n' $ACME_ID $GLOBEX_ID $ACME_ID > reports/ledger.csv
+  python3 ../agent/reconcile.py --payrun $PAYRUN --from-block $DEPLOY_BLOCK --ledger reports/ledger.csv --out reports/recon.json || true
   echo "--- executing the same run again"
   cast send --legacy --private-key $K0 $PAYRUN "execute(uint256)" 1 --rpc-url $F 2>&1 | grep -o "custom error 0x[0-9a-f]*" | head -1 || true
 fi
