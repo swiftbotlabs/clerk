@@ -25,12 +25,22 @@ flowchart LR
 | Path | What it does |
 |---|---|
 | `contracts/src/PayRun.sol` | Staging-only session keys (expiry, per-run cap, per-day cap, revoke), `stage()` with on-chain Confirmation of Payee, pay-once invoices, owner `execute()` / `reject()`, 7-day run expiry, `headroom()` view. Shanghai EVM. |
-| `contracts/test/` | 9 unit tests + a fork test against the real Aevum ERC-8004 registry |
+| `contracts/test/` | 9 unit tests + fork tests against the real Aevum ERC-8004 registry, EntryPoint v0.7 and Kernel v3.1 |
 | `agent/check.py` | Fail-closed checks between an invoice and the line a model proposed (12 tests) |
 | `agent/stage.py` | `plan` / `stage`: extract, check, dedupe by `keccak256(file)` on chain, pack within the key's headroom, simulate, send with retries and a landed-check (idempotent) |
 | `agent/reconcile.py` | `Paid` events in 1,000-block chunks, matched to `ledger.csv` |
 | `web/index.html` | Approval page: each staged line with the invoice line behind every number, held and stopped invoices, approve or reject from the owner's wallet |
 | `e2e/run_fork.sh` | The whole flow on a local fork of Aevum testnet (real registry, real tUSD8) |
+
+## The owner is a smart account (ERC-4337, Kernel v3.1 on Aevum)
+`contracts/test/fork/KernelOwnerFork.t.sol` runs on a fork of Aevum testnet with Aevum's own deployed contracts: EntryPoint v0.7
+(`0x0000000071727De22E5E9d8BAf0edAc6f37da032`), Kernel v3.1 factory (`0xaac5D4240AF87249B3f71BC8E4A2cae074A3E419`) and
+implementation (`0xBAC849bB641841b44E965fB01A4Bf5F074f84b4D`), Kernel's ECDSA validator (`0x845ADb2C711129d4f3966735eD98a9F09fC4cE57`).
+- A Kernel account is both the PayRun owner and the treasury that holds the tUSD8.
+- One **batched UserOperation** approves PayRun and grants the agent's staging-only session key (expiry, per-run cap, per-day cap).
+- The agent stages a run; it cannot execute it. A second UserOperation from the account executes the run and pays the registered wallet.
+- A UserOperation signed by any other key is refused by the EntryPoint (`AA24 signature error`), and the owner's signing key on its own
+  cannot call PayRun: only the account can. (Planted control: signing the pay UserOperation with a stranger's key turns the test red.)
 
 ## Safety and controls
 | Risk | Control | Where |
@@ -69,7 +79,7 @@ Environment: `AEVUM_RPC` (default `https://rpc-test.qday.info`), `AEVUM_REGISTRY
 | PayRun | _deploying_ |
 
 ## Limits and next steps
-- The owner is a plain account today; Aevum's ERC-4337 EntryPoint v0.7 and Kernel v3.1 accounts would let a Kernel session-key validator replace `grantSession`.
+- The owner runs as a Kernel v3.1 smart account in the fork tests; the testnet runner still uses a plain owner key. The agent's session key lives in PayRun (`grantSession`); a Kernel permission validator could hold it inside the account instead.
 - The daily cap counts staged amounts (rejected runs still count), which is deliberately conservative.
 - PDF and image invoices need a text layer first (pdftotext / OCR) before `check.py` can verify numbers.
 
