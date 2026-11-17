@@ -36,7 +36,7 @@ flowchart LR
 `contracts/test/fork/KernelOwnerFork.t.sol` runs on a fork of Aevum testnet with Aevum's own deployed contracts: EntryPoint v0.7
 (`0x0000000071727De22E5E9d8BAf0edAc6f37da032`), Kernel v3.1 factory (`0xaac5D4240AF87249B3f71BC8E4A2cae074A3E419`) and
 implementation (`0xBAC849bB641841b44E965fB01A4Bf5F074f84b4D`), Kernel's ECDSA validator (`0x845ADb2C711129d4f3966735eD98a9F09fC4cE57`).
-- A Kernel account is both the PayRun owner and the treasury that holds the tUSD8.
+- A Kernel account is both the PayRun owner and the treasury that holds the tUSD8. `e2e/kernel.sh` does the same with `cast` only (create the account, sign a UserOperation, `handleOps`); `KERNEL=1 ./run_fork.sh` runs the whole flow that way, and the testnet runner uses it by default.
 - One **batched UserOperation** approves PayRun and grants the agent's staging-only session key (expiry, per-run cap, per-day cap).
 - The agent stages a run; it cannot execute it. A second UserOperation from the account executes the run and pays the registered wallet.
 - A UserOperation signed by any other key is refused by the EntryPoint (`AA24 signature error`), and the owner's signing key on its own
@@ -63,6 +63,7 @@ cd contracts && forge test                                   # unit tests
 forge test --match-path 'test/fork/*' --fork-url https://rpc-test.qday.info   # against the real registry
 cd ../agent/tests && python3 test_check.py                   # check.py
 cd ../../e2e && ./run_fork.sh                                 # full flow on a local fork (chain 440050)
+KERNEL=1 ./run_fork.sh                                        # same, the owner + treasury as a Kernel v3.1 smart account (UserOperations)
 EXTRACTOR=llm ./run_fork.sh                                   # same, with the LLM extractor (needs CLERK_LLM_URL)
 ```
 
