@@ -50,7 +50,7 @@ h2{font-size:20px;margin:40px 0 4px}h2+p{color:var(--muted);margin:0 0 14px;font
 <h2>Stopped</h2><p>These failed a rule the clerk can't override.</p><section id="stop"></section>
 </main>
 <script type="module">
-import { createWalletClient, createPublicClient, custom, http, parseAbi, formatUnits, encodeFunctionData, encodePacked } from 'https://esm.sh/viem@2.21.0';
+import { createWalletClient, createPublicClient, custom, http, parseAbi, formatUnits, encodeFunctionData, encodePacked } from './vendor/viem-2.21.0.js';   // vendored (esm.sh viem@2.21.0 es2022 bundle), sha256 in README
 const ABI = parseAbi([
   'function runs(uint256) view returns (uint8 status, address stagedBy, uint64 stagedAt, uint128 total, uint32 lineCount)',
   'function execute(uint256 runId)', 'function reject(uint256 runId, string reason)', 'function owner() view returns (address)']);
@@ -83,6 +83,19 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '';
 const money = (u) => Number(formatUnits(BigInt(u), 6)).toLocaleString('en', { minimumFractionDigits: 2 }) + ' tUSD8';
+// The only PayRun this hosted page will send approvals to (Aevum testnet). A report for any other contract is shown read-only.
+const PINNED = { 44005: '0x2EE29a167CDDb964aAB9C899ea9Ae89847e3Da98' };
+const LOCAL = ['localhost', '127.0.0.1', ''].includes(location.hostname);
+const isInt = (v) => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) || (typeof v === 'string' && /^\d{1,18}$/.test(v));
+// Reports are data from outside: keep only well-formed fields, so nothing from a report can become markup or a contract address unchecked.
+function clean(r) {
+  if (!r || typeof r !== 'object' || !/^0x[0-9a-fA-F]{40}$/.test(String(r.payrun))) throw new Error('not a Clerk pay-run report');
+  const items = (Array.isArray(r.items) ? r.items : []).filter((i) => i && typeof i === 'object' && i.proposed && typeof i.proposed === 'object'
+    && (i.run_id == null || (isInt(i.run_id) && Number(i.run_id) > 0)) && (i.agent_id == null || isInt(i.agent_id)) && isInt(i.units ?? 0))
+    .map((i) => ({ ...i, run_id: i.run_id == null ? null : Number(i.run_id), agent_id: i.agent_id == null ? null : Number(i.agent_id), units: String(i.units ?? 0) }));
+  return { payrun: r.payrun, items };
+}
+const trusted = () => LOCAL || report.payrun.toLowerCase() === (PINNED[chainId] || '').toLowerCase();
 const notes = {};   // runId -> what happened to the owner's last action (kept across re-renders)
 let report, wallet, account, chainId = Number(new URLSearchParams(location.search).get('chain') || 44005);
 const pub = () => createPublicClient({ transport: http(CHAINS[chainId].rpc) });
@@ -94,7 +107,7 @@ function snippet(text, value) {
 }
 function slip(it) {
   const p = it.proposed, e = it.evidence || {};
-  return `<div class="slip"><div class="who">${esc(it.registered_name)}<span class="id">agent #${it.agent_id}</span></div>
+  return `<div class="slip"><div class="who">${esc(it.registered_name)}<span class="id">agent #${esc(it.agent_id)}</span></div>
     <div class="amt">${money(it.units)}</div>
     <div class="meta"><span class="verdict v-ok">Payee confirmed</span>Invoice ${esc(p.reference)}, due ${esc(p.due_date)}, to ${esc(short(p.wallet))}</div>
     <div class="src">${snippet(e.amount, p.amount)}${snippet(e.reference, p.reference)}${snippet(e.due_date, p.due_date)}</div></div>`;
@@ -112,12 +125,13 @@ async function render() {
     const total = byRun[id].reduce((s, i) => s + BigInt(i.units), 0n);
     parts.push(`<article class="run ${st === 2 ? 'done' : ''}" data-run="${id}"><div class="runhead"><div><div class="status">Run ${id}: ${STATUS[st] || 'Unknown'}</div>
       <div class="total">${money(total)}<small>${byRun[id].length} invoice${byRun[id].length > 1 ? 's' : ''}</small></div></div>
-      <div class="actions">${st === 1 ? `<button class="pay" data-act="execute" data-run="${id}">Approve and pay</button><button data-act="reject" data-run="${id}">Reject</button>` : ''}</div></div>
+      <div class="actions">${st === 1 && trusted() ? `<button class="pay" data-act="execute" data-run="${id}">Approve and pay</button><button data-act="reject" data-run="${id}">Reject</button>` : ''}</div></div>
       ${byRun[id].map(slip).join('')}<div class="slip status" id="tx-${id}" ${notes[id] ? '' : 'hidden'}>${notes[id] || ''}</div></article>`);
   }
   $('#headline').textContent = waiting === 0 ? (ids.length ? 'Nothing is waiting for you' : 'Nothing to approve')
     : waiting === 1 ? 'One pay run is waiting for you' : `${waiting} pay runs are waiting for you`;
   $('#runs').innerHTML = parts.join('') || '<p class="empty">The clerk staged nothing this time.</p>';
+  if (!trusted()) $('#runs').insertAdjacentHTML('afterbegin', '<p class="empty" role="alert">This report names a contract that is not Clerk\'s deployed PayRun, so it is shown read-only.</p>');
   const other = (dec) => items.filter((i) => i.decision === dec || (dec === 'HOLD' && i.decision === 'PAYABLE' && i.skip && !i.run_id && i.skip.startsWith('over')));
   const card = (i, cls, label) => `<div class="item"><span class="verdict ${cls}">${label}</span><strong>${esc(i.proposed.vendor || i.file)}</strong>
     ${i.proposed.amount ? ' · ' + esc(i.proposed.amount) + ' ' + esc(i.proposed.currency || '') : ''}<ul>${[...(i.reasons || []), ...(i.warnings || []), ...(i.skip ? [i.skip] : [])].map((r) => `<li>${esc(r)}</li>`).join('')}</ul></div>`;
@@ -133,7 +147,7 @@ async function connect() {
   $('#connect').textContent = 'Connected';
 }
 document.addEventListener('click', async (ev) => {
-  const b = ev.target.closest('button[data-act]'); if (!b) return;
+  const b = ev.target.closest('button[data-act]'); if (!b || !report || !trusted()) return;
   if (!wallet) await connect(); if (!wallet) return;
   const id = BigInt(b.dataset.run), out = $('#tx-' + b.dataset.run); out.hidden = false;
   try {
@@ -154,9 +168,14 @@ document.addEventListener('click', async (ev) => {
   } catch (e) { out.textContent = 'Not sent: ' + (e.shortMessage || e.message || e); }
 });
 $('#connect').onclick = connect;
-$('#file').onchange = async (e) => { report = JSON.parse(await e.target.files[0].text()); $('#loader').hidden = true; render(); };
+$('#file').onchange = async (e) => { try { report = clean(JSON.parse(await e.target.files[0].text())); $('#loader').hidden = true; render(); } catch (err) { $('#headline').textContent = 'That file is not a Clerk report'; } };
+// ?report= may only name a file on this same site (no other host): a link can't make this page load someone else's report.
+function sameSite(src) { try { const u = new URL(src, location.href); return u.origin === location.origin ? u.href : null; } catch { return null; } }
 const src = new URLSearchParams(location.search).get('report');
-// Hosted (GitHub Pages): with no ?report=, the page opens the latest testnet run in report.json next to it.
-const def = src ? null : await fetch('report.json').then((r) => (r.ok ? r.json() : null)).catch(() => null);
-if (src) { report = await (await fetch(src)).json(); render(); } else if (def) { report = def; render(); } else { $('#loader').hidden = false; }
+async function load(url) { const r = await fetch(url, { credentials: 'omit' }); if (!r.ok) throw new Error('report not found'); return clean(await r.json()); }
+try {
+  if (src) { const u = sameSite(src); if (!u) throw new Error('Reports can only be opened from this site'); report = await load(u); }
+  else report = await load('report.json').catch(() => null);   // hosted: the latest testnet run, next to this page
+  if (report) render(); else $('#loader').hidden = false;
+} catch (err) { $('#headline').textContent = String(err.message); $('#loader').hidden = false; }
 </script></body></html>
