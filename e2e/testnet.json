@@ -1,0 +1,20 @@
+{
+ "gas_clerk": "0x1039d82f636cd4e678ce7713f84f818a0f60c53a6ec6c972857711095043800e",
+ "gas_vendor_acme": "0x630511aa360a3669c7f8508aae3d27dd6810c44ff27f7e47495ec89ffcf1ded7",
+ "gas_vendor_globex": "0xe348866d821978ab4c0c4842b2a80ace98ce818215af39659aa9fac3b163fb49",
+ "acme_register": "0x79f5123103cb22251702eb7f27a1b5ec11e30625af100763935a9b8fd6215edb",
+ "acme_id": "1698",
+ "globex_register": "0xc6375c163fecb3a023697e778d45e4c3dc73208b7f6e8bb2bf6ef81609bde302",
+ "globex_id": "1699",
+ "kernel_account": "0xc0bC2ab048dCa250417bEaFf6B68A222a4ae2d1C",
+ "kernel_gas_tx": "0x302ef35217f52187a203d15e34de9902e2227cdb0a442bcdf57b1a6e3bb82e58",
+ "kernel_fund_tx": "0x18a4d18dbb54767dd034780a4708edfdb696864594b96d177e99335e556d7b0c",
+ "payrun": "0x2EE29a167CDDb964aAB9C899ea9Ae89847e3Da98",
+ "payrun_deploy_tx": "0x7f446fc86fffa0c8b733de3d8e333850ce8cb53059912bc74ed71cb9b04ac47f",
+ "payrun_block": "3637396",
+ "grant_tx": "0x14fb17c7e92a0627a73002f591924cb0163de8d21598169eccee59d27ebcc642",
+ "approve_tx": "0x14fb17c7e92a0627a73002f591924cb0163de8d21598169eccee59d27ebcc642",
+ "stage_run": "1",
+ "stage_tx": "0xf73f54faa5ad8feed72acf43a53ecbec78dd6287756ee83224f6badc59e70a42",
+ "execute_tx": "0xdde4f5aaac0670d846bb41a28293cd81c37526087d428b917f1b39f83bf4c2f9"
+}

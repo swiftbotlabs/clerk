@@ -77,10 +77,17 @@ Environment: `AEVUM_RPC` (default `https://rpc-test.qday.info`), `AEVUM_REGISTRY
 | Chain | 44005, RPC https://rpc-test.qday.info, explorer https://explorer-test.qday.info |
 | tUSD8 | `0x456569838f1d43009A91ebA4263147Afd7233483` (6 decimals) |
 | ERC-8004 identity registry | `0xF45E7f39Caba1d2055f613970575a7e7069636Be` |
-| PayRun | _deploying_ |
+| PayRun | [`0x2EE29a167CDDb964aAB9C899ea9Ae89847e3Da98`](https://explorer-test.qday.info/address/0x2EE29a167CDDb964aAB9C899ea9Ae89847e3Da98) (deploy [0x7f446fc8…](https://explorer-test.qday.info/tx/0x7f446fc86fffa0c8b733de3d8e333850ce8cb53059912bc74ed71cb9b04ac47f), block 3637396) |
+| Owner + treasury | Kernel v3.1 smart account [`0xc0bC2ab048dCa250417bEaFf6B68A222a4ae2d1C`](https://explorer-test.qday.info/address/0xc0bC2ab048dCa250417bEaFf6B68A222a4ae2d1C) |
+| Vendor identities (ERC-8004) | Acme Supplies #1698 ([0x79f51231…](https://explorer-test.qday.info/tx/0x79f5123103cb22251702eb7f27a1b5ec11e30625af100763935a9b8fd6215edb)), Globex Logistics #1699 ([0xc6375c16…](https://explorer-test.qday.info/tx/0xc6375c163fecb3a023697e778d45e4c3dc73208b7f6e8bb2bf6ef81609bde302)) |
+| Approve + session grant (one UserOperation) | [0x14fb17c7…](https://explorer-test.qday.info/tx/0x14fb17c7e92a0627a73002f591924cb0163de8d21598169eccee59d27ebcc642) |
+| Run 1 staged by the clerk's session key | [0xf73f54fa…](https://explorer-test.qday.info/tx/0xf73f54faa5ad8feed72acf43a53ecbec78dd6287756ee83224f6badc59e70a42): INV-1001 1.20 + G-77 0.80; redirect BLOCKED, look-alike HOLD, 6.50 over cap |
+| Run 1 paid by the owner (UserOperation) | [0xdde4f5aa…](https://explorer-test.qday.info/tx/0xdde4f5aaac0670d846bb41a28293cd81c37526087d428b917f1b39f83bf4c2f9): Acme +1.20, Globex +0.80 tUSD8; reconcile PAID_OK x2, INV-1002 UNPAID |
+
+Every hash is also in `e2e/testnet.json`; `e2e/run_testnet.sh` reproduces the run and skips steps already done.
 
 ## Limits and next steps
-- The owner runs as a Kernel v3.1 smart account in the fork tests; the testnet runner still uses a plain owner key. The agent's session key lives in PayRun (`grantSession`); a Kernel permission validator could hold it inside the account instead.
+- The owner runs as a Kernel v3.1 smart account in the fork tests and on testnet (above). The agent's session key lives in PayRun (`grantSession`); a Kernel permission validator could hold it inside the account instead.
 - The daily cap counts staged amounts (rejected runs still count), which is deliberately conservative.
 - PDF and image invoices need a text layer first (pdftotext / OCR) before `check.py` can verify numbers.
 
