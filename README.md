@@ -25,13 +25,17 @@ flowchart LR
 | Path | What it does |
 |---|---|
 | `contracts/src/PayRun.sol` | Staging-only session keys (expiry, per-run cap, per-day cap, revoke), `stage()` with on-chain Confirmation of Payee, pay-once invoices, owner `execute()` / `reject()`, 7-day run expiry, `headroom()` view. Shanghai EVM. |
+| `contracts/src/PayRunV2.sol` | PayRun plus the **payee-change hold** (below). Same staging, caps and approval flow. In the repo and tested; the testnet deployment is still the first PayRun |
 | `contracts/test/` | 9 unit tests, 10 property tests (5 fuzzed at 256 runs: run cap, day cap, wrong payee for any address and agent id, owner-only actions for any caller, exact totals) + fork tests against the real Aevum ERC-8004 registry, EntryPoint v0.7 and Kernel v3.1 |
+| `contracts/test/PayRunV2*.t.sol` | 38 tests for PayRunV2: the 19 above re-run against it, plus 19 for the hold (4 fuzzed, including A to B to A) |
+| `contracts/script/hold_controls.sh` | Revert control: switches each hold rule off in turn, expects tests to fail, restores the source byte for byte, expects all green |
 | `contracts/script/match_onchain.py` | Shows the deployed PayRun is this source: compiles it, reads the runtime bytecode from the chain, compares byte for byte (metadata hash included) |
 | `agent/check.py` | Fail-closed checks between an invoice and the line a model proposed (12 tests) |
 | `agent/stage.py` | `plan` / `stage`: extract, check, dedupe by `keccak256(file)` on chain, pack within the key's headroom, simulate, send with retries and a landed-check (idempotent) |
-| `agent/reconcile.py` | `Paid` events in 1,000-block chunks, matched to `ledger.csv` |
+| `agent/reconcile.py` | `Paid` events in 1,000-block chunks, matched to `ledger.csv`; on PayRunV2 also `HELD` rows and the payee audit trail |
 | `web/index.html` | Approval page: each staged line with the invoice line behind every number, held and stopped invoices, approve or reject from the owner's wallet |
 | `e2e/run_fork.sh` | The whole flow on a local fork of Aevum testnet (real registry, real tUSD8) |
+| `e2e/hold_local.sh` | PayRunV2's hold end to end on a local chain: change, block, A to B to A, reconcile, and (`PAGE=1`) confirm and pay from the approval page |
 
 ## The owner is a smart account (ERC-4337, Kernel v3.1 on Aevum)
 `contracts/test/fork/KernelOwnerFork.t.sol` runs on a fork of Aevum testnet with Aevum's own deployed contracts: EntryPoint v0.7
@@ -55,18 +59,60 @@ implementation (`0xBAC849bB641841b44E965fB01A4Bf5F074f84b4D`), Kernel's ECDSA va
 | Partial payment runs | All-or-nothing execution | `PayRun.execute` |
 | Stale approvals | A staged run expires after 7 days | `RUN_TTL` |
 | Audit | `Paid(runId, line, invoiceHash, ref, payeeAgentId, payee, amount)` + reconciliation | `reconcile.py` |
+| Vendor's wallet swapped in the registry ("new bank details") | First payment to a new or changed wallet is held until the window passes or the owner confirms it | `PayRunV2` (below) |
+
+## Payee-change hold (PayRunV2)
+The registry check stops a clerk from paying an address the vendor never registered. It can't stop an attacker who takes over the
+vendor's identity and registers a new wallet. PayRunV2 adds a hold for that case:
+
+- PayRunV2 remembers, for each vendor identity, the wallet it **trusts**: one the owner confirmed, or one that was paid after its hold ran out.
+- A brand-new vendor, or any change of the registered wallet, starts a **hold** the first time the contract sees it (in `stage`, `execute`,
+  `confirmPayee` or the public `observePayee` a watcher can call). The window is set by the owner (`setHoldWindow`, 1 hour to 3 days,
+  default 24 hours). Changing it never shortens a hold that is already running.
+- While a payee is held, `execute` pays nothing. It returns `false` and emits `PaymentBlocked(runId, line, agentId, payee, reason, releaseAt)`
+  rather than reverting, so the block and the hold stay on chain.
+- The owner (the Kernel smart account on testnet) can release a hold early with `confirmPayee(agentId, wallet)`, after checking with the
+  vendor on a known channel. The wallet must be the one registered right now. This emits `PayeeConfirmed(agentId, wallet, by, releaseAt)`
+  as the audit entry. The clerk's session key can't confirm.
+- Events: `PayeeChanged`, `HoldStarted`, `StagedOnHold`, `PaymentBlocked`, `PayeeConfirmed`, `HoldReleased`, `HoldWindowChanged`. Views:
+  `payeeStatus(agentId)` and `canExecute(runId)`, which tells you whether a run would pay now and, if not, which line blocks it and why.
+
+How this beats a plain "new payee delay" (a cooling-off on addresses in your own registry):
+| Attack | Plain delay | PayRunV2 |
+|---|---|---|
+| Change the wallet to B, then back to the old A, to look "known" | A counts as known again | Trust in A ends at the first change. Every change restarts the hold |
+| Send the invoice during the cooling-off and wait for the timer | Pays once the timer ends | A run staged while the payee was held needs the owner's confirmation. Waiting, or a later run paying the same wallet, doesn't release it |
+| Change the wallet after the run is staged (or change it and change it back) | Depends | The run is refused and closed. The clerk has to stage again, and the new wallet is held |
+| Wait out the delay before the payer ever looks | Counts from the change | The clock starts when the contract first sees the wallet |
+| Get the AI to approve the new wallet | Depends | Only the owner's account can call `confirmPayee` |
+
+It reads the vendor's official ERC-8004 wallet, so it also protects vendors who never signed up to our app.
+
+The approval page reads `canExecute`. A held run shows a red notice with the hold's end time and a **Confirm payee** button instead of
+**Approve and pay**. `reconcile.py` lists held invoices as `HELD`, with the reason, and prints each hold event as an `ALERT` line.
+
+How we test it:
+- 19 hold tests in `PayRunV2Hold.t.sol`. One is a fuzzed A to B to A run: any sequence of changes the contract sees, ending on the original
+  wallet, never pays without the owner.
+- `contracts/script/hold_controls.sh` switches off five parts of the rule in turn and checks that tests go red each time: the hold
+  itself, trust ending on a change, owner-only confirmation, confirmation for runs staged during a hold, and the changed-since-staging
+  check.
+
+The testnet PayRun above is the first version. PayRunV2 is not deployed yet.
 
 ## Run it
 Requirements: Foundry (`forge`, `cast`, `anvil`), Python 3.11+, a Solidity 0.8.24+ compiler (set `solc` in `contracts/foundry.toml`).
 
 ```bash
-cd contracts && forge test --no-match-path 'test/fork/*'    # 19 unit + property tests
+cd contracts && forge test --no-match-path 'test/fork/*'    # 57 unit + property tests (PayRun 19, PayRunV2 38)
+script/hold_controls.sh                                      # revert control for the payee-change hold
 python3 script/match_onchain.py                              # deployed bytecode == this source
 forge test --match-path 'test/fork/*' --fork-url https://rpc-test.qday.info   # against the real registry
-cd ../agent/tests && python3 test_check.py                   # check.py
+cd ../agent/tests && python3 test_check.py && python3 test_reconcile.py   # check.py, reconcile.py
 cd ../../e2e && ./run_fork.sh                                 # full flow on a local fork (chain 440050)
 KERNEL=1 ./run_fork.sh                                        # same, the owner + treasury as a Kernel v3.1 smart account (UserOperations)
 EXTRACTOR=llm ./run_fork.sh                                   # same, with the LLM extractor (needs CLERK_LLM_URL)
+PAGE=1 ./hold_local.sh                                        # PayRunV2 hold on a local chain, no network (PAGE=1 needs playwright)
 ```
 
 Environment: `AEVUM_RPC` (default `https://rpc-test.qday.info`), `AEVUM_REGISTRY` (default the testnet registry), `PAYRUN` (deployed address),
