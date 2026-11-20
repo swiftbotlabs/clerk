@@ -1,0 +1,9 @@
+ACME SUPPLIES LTD
+Invoice No: INV-1004
+From: Acme Supplies Ltd
+Bill to: Swift Bot Labs
+Date: 2026-11-20
+Due date: 2026-12-05
+Item: 2 x shipping labels roll, 0.30
+Amount due: 0.30 tUSD8
+Pay to: 0x44e13Ef1C1AB14EB0a298103aB7541CC7ab6Ece0

@@ -1,0 +1,9 @@
+GLOBEX LOGISTICS
+Invoice G-78
+From: Globex Logistics
+Bill to: Swift Bot Labs
+Date: 2026-11-20
+Due date: 2026-12-04
+Courier, 1 parcel: 0.20
+Amount due: 0.20 tUSD8
+Pay to: 0xdA286b3Ad1f68d4e67a70417328743d013FC6B72

@@ -1,0 +1,5 @@
+PAYABLE  MATCH        inv-acme-1004.txt                  0.30  
+BLOCK    MATCH        inv-acme-1005-redirect.txt         0.00  wallet is registered for vendor: failed
+HOLD     CLOSE_MATCH  inv-acmee-56.txt                   0.00  name is a close match to the registered 'Acme Supplies Ltd' (0.92): a human must confirm
+HOLD     MATCH        inv-globex-g78.txt                 0.00  reference in document: failed
+RUN staged 0x844395b6c1f59875246e2cac4988bbc3d3ac34523b68adf12140a33a201cb188 inv-acme-1004.txt 

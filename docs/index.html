@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Clerk pay runs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#EEF1F4;--paper:#FFFFFF;--ink:#1B2430;--muted:#5A6676;--rule:#C9D4E0;--ok:#1F7A4D;--ok-bg:#E3F2EA;--hold:#9A6212;--hold-bg:#FBF0DC;
+  --stop:#B4232C;--stop-bg:#FBE6E7;--mark:#FFE58A;--focus:#2B6CB0}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#121821;--paper:#1A2230;--ink:#E7ECF2;--muted:#9AA7B8;--rule:#2E3A4B;
+  --ok:#5CC08A;--ok-bg:#183326;--hold:#E5B35C;--hold-bg:#33291A;--stop:#F07A80;--stop-bg:#3A1D21;--mark:#6B5A12;--focus:#7FB2EA}}
+*{box-sizing:border-box}html,body{margin:0}[hidden]{display:none!important}
+body{background:var(--bg);color:var(--ink);font:400 16px/1.5 "Public Sans",system-ui,sans-serif;font-variant-numeric:tabular-nums}
+main{max-width:860px;margin:0 auto;padding:28px 16px 80px}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.brand{font-weight:700;font-size:18px}.net{font-size:14px;color:var(--muted)}
+button{font:600 15px "Public Sans",sans-serif;border-radius:10px;padding:10px 16px;border:1.5px solid var(--ink);background:var(--paper);color:var(--ink);cursor:pointer}
+button.pay{background:var(--ok);border-color:var(--ok);color:#fff}button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+h1{font-size:34px;line-height:1.15;letter-spacing:-.01em;margin:34px 0 6px;font-weight:700}
+.lede{color:var(--muted);margin:0 0 26px;max-width:62ch}
+h2{font-size:20px;margin:40px 0 4px}h2+p{color:var(--muted);margin:0 0 14px;font-size:15px}
+.run{background:var(--paper);border:1.5px solid var(--rule);border-radius:16px;overflow:hidden}
+.runhead{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;padding:18px 20px;border-bottom:1.5px solid var(--rule);flex-wrap:wrap}
+.total{font-size:30px;font-weight:700;letter-spacing:-.01em}.total small{font-size:15px;font-weight:500;color:var(--muted);margin-left:6px}
+.actions{display:flex;gap:10px;flex-wrap:wrap}
+.slip{padding:16px 20px;border-bottom:1px dashed var(--rule);display:grid;grid-template-columns:1fr auto;gap:4px 16px}
+.slip:last-child{border-bottom:0}
+.who{font-weight:600}.who .id{font-weight:400;color:var(--muted);font-size:14px;margin-left:6px}
+.amt{font-weight:700;font-size:18px;text-align:right}
+.meta{color:var(--muted);font-size:14px;grid-column:1/-1}
+.src{grid-column:1/-1;margin:8px 0 0;padding:10px 12px;border-left:3px solid var(--rule);background:var(--bg);border-radius:0 8px 8px 0;font-size:14px}
+.src div{white-space:pre-wrap;word-break:break-word}.src mark{background:var(--mark);color:inherit;border-radius:3px;padding:0 2px}
+.verdict{display:inline-block;font-size:13px;font-weight:600;border-radius:999px;padding:2px 10px;margin-right:6px}
+.v-ok{background:var(--ok-bg);color:var(--ok)}.v-hold{background:var(--hold-bg);color:var(--hold)}.v-stop{background:var(--stop-bg);color:var(--stop)}
+.item{background:var(--paper);border:1.5px solid var(--rule);border-radius:14px;padding:14px 18px;margin:0 0 10px}
+.item ul{margin:6px 0 0;padding-left:18px;color:var(--muted);font-size:14px}
+.status{font-size:14px;color:var(--muted)}.status a{color:inherit}
+.empty{color:var(--muted);font-style:italic}
+.load{background:var(--paper);border:1.5px dashed var(--rule);border-radius:14px;padding:16px 18px}
+@media (max-width:560px){h1{font-size:27px}.slip{grid-template-columns:1fr}.amt{text-align:left}}
+@media (prefers-reduced-motion:no-preference){.run.done{transition:border-color .4s}.run.done{border-color:var(--ok)}}
+</style></head>
+<body><main>
+<header><div class="brand">Clerk</div><div style="display:flex;gap:10px;align-items:center"><span class="net" id="net">Wallet not connected</span><button id="connect">Connect wallet</button></div></header>
+<h1 id="headline">Pay runs waiting for you</h1>
+<p class="lede">Your AI clerk read the invoices and staged these payments. It can't pay anything itself. Each payee below is the wallet the vendor registered on Aevum, and every number is shown in the invoice it came from.</p>
+<div id="loader" class="load" hidden><label for="file">Open a pay-run report (report.json from the clerk)</label><br><input id="file" type="file" accept="application/json"></div>
+<section id="runs"></section>
+<h2>Needs your check</h2><p>The clerk did not stage these. Look at them yourself before paying anything.</p><section id="hold"></section>
+<h2>Stopped</h2><p>These failed a rule the clerk can't override.</p><section id="stop"></section>
+</main>
+<script type="module">
+import { createWalletClient, createPublicClient, custom, http, parseAbi, formatUnits, encodeFunctionData, encodePacked } from 'https://esm.sh/viem@2.21.0';
+const ABI = parseAbi([
+  'function runs(uint256) view returns (uint8 status, address stagedBy, uint64 stagedAt, uint128 total, uint32 lineCount)',
+  'function execute(uint256 runId)', 'function reject(uint256 runId, string reason)', 'function owner() view returns (address)']);
+// The owner may be an ERC-4337 smart account (Kernel v3.1 on Aevum): then the connected wallet is its signing key, signs a
+// UserOperation, and submits it to Aevum's EntryPoint v0.7 itself.
+const EP = '0x0000000071727De22E5E9d8BAf0edAc6f37da032';
+const OP = '(address sender,uint256 nonce,bytes initCode,bytes callData,bytes32 accountGasLimits,uint256 preVerificationGas,bytes32 gasFees,bytes paymasterAndData,bytes signature)';
+const EP_ABI = parseAbi([`function getUserOpHash(${OP} op) view returns (bytes32)`, 'function getNonce(address sender, uint192 key) view returns (uint256)',
+  `function handleOps(${OP}[] ops, address beneficiary)`]);
+const KERNEL_ABI = parseAbi(['function execute(bytes32 mode, bytes executionCalldata)']);
+const OP_EVENT = '0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f'; // UserOperationEvent
+async function viaSmartAccount(owner, inner) {
+  const callData = encodeFunctionData({ abi: KERNEL_ABI, functionName: 'execute', args: ['0x' + '00'.repeat(32),
+    encodePacked(['address', 'uint256', 'bytes'], [report.payrun, 0n, inner])] });
+  const nonce = await pub().readContract({ address: EP, abi: EP_ABI, functionName: 'getNonce', args: [owner, 0n] });
+  const op = { sender: owner, nonce, initCode: '0x', callData, accountGasLimits: encodePacked(['uint128', 'uint128'], [600000n, 600000n]),
+    preVerificationGas: 60000n, gasFees: encodePacked(['uint128', 'uint128'], [1000000000n, 1000000000n]), paymasterAndData: '0x', signature: '0x' };
+  const userOpHash = await pub().readContract({ address: EP, abi: EP_ABI, functionName: 'getUserOpHash', args: [op] });
+  op.signature = await wallet.signMessage({ account, message: { raw: userOpHash } });
+  const hash = await wallet.writeContract({ account, chain: null, address: EP, abi: EP_ABI, functionName: 'handleOps', args: [[op], account], type: 'legacy' });
+  const rc = await pub().waitForTransactionReceipt({ hash });
+  const ev = rc.logs.find((l) => l.topics[0] === OP_EVENT);
+  if (!ev || BigInt('0x' + ev.data.slice(2 + 64, 2 + 128)) !== 1n) throw new Error('the smart account refused the call (nothing was paid)');
+  return hash;
+}
+const CHAINS = { 44005: { name: 'Aevum testnet', rpc: 'https://rpc-test.qday.info', explorer: 'https://explorer-test.qday.info' },
+                 440050: { name: 'Aevum fork (local)', rpc: 'http://127.0.0.1:8555', explorer: null } };
+const STATUS = ['', 'Waiting for your approval', 'Paid', 'Rejected'];
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '';
+const money = (u) => Number(formatUnits(BigInt(u), 6)).toLocaleString('en', { minimumFractionDigits: 2 }) + ' tUSD8';
+const notes = {};   // runId -> what happened to the owner's last action (kept across re-renders)
+let report, wallet, account, chainId = Number(new URLSearchParams(location.search).get('chain') || 44005);
+const pub = () => createPublicClient({ transport: http(CHAINS[chainId].rpc) });
+
+function snippet(text, value) {
+  if (!text) return '<div class="empty">Not found in the invoice</div>';
+  const v = String(value ?? ''); const i = text.toLowerCase().indexOf(v.toLowerCase());
+  return '<div>' + (v && i >= 0 ? esc(text.slice(0, i)) + '<mark>' + esc(text.slice(i, i + v.length)) + '</mark>' + esc(text.slice(i + v.length)) : esc(text)) + '</div>';
+}
+function slip(it) {
+  const p = it.proposed, e = it.evidence || {};
+  return `<div class="slip"><div class="who">${esc(it.registered_name)}<span class="id">agent #${it.agent_id}</span></div>
+    <div class="amt">${money(it.units)}</div>
+    <div class="meta"><span class="verdict v-ok">Payee confirmed</span>Invoice ${esc(p.reference)}, due ${esc(p.due_date)}, to ${esc(short(p.wallet))}</div>
+    <div class="src">${snippet(e.amount, p.amount)}${snippet(e.reference, p.reference)}${snippet(e.due_date, p.due_date)}</div></div>`;
+}
+async function render() {
+  const items = report.items || [];
+  const byRun = {};
+  for (const it of items) if (it.run_id) (byRun[it.run_id] ||= []).push(it);
+  const ids = Object.keys(byRun);
+  const parts = []; let waiting = 0;
+  for (const id of ids) {
+    let st = 1;
+    try { st = Number((await pub().readContract({ address: report.payrun, abi: ABI, functionName: 'runs', args: [BigInt(id)] }))[0]); } catch {}
+    if (st === 1) waiting++;
+    const total = byRun[id].reduce((s, i) => s + BigInt(i.units), 0n);
+    parts.push(`<article class="run ${st === 2 ? 'done' : ''}" data-run="${id}"><div class="runhead"><div><div class="status">Run ${id}: ${STATUS[st] || 'Unknown'}</div>
+      <div class="total">${money(total)}<small>${byRun[id].length} invoice${byRun[id].length > 1 ? 's' : ''}</small></div></div>
+      <div class="actions">${st === 1 ? `<button class="pay" data-act="execute" data-run="${id}">Approve and pay</button><button data-act="reject" data-run="${id}">Reject</button>` : ''}</div></div>
+      ${byRun[id].map(slip).join('')}<div class="slip status" id="tx-${id}" ${notes[id] ? '' : 'hidden'}>${notes[id] || ''}</div></article>`);
+  }
+  $('#headline').textContent = waiting === 0 ? (ids.length ? 'Nothing is waiting for you' : 'Nothing to approve')
+    : waiting === 1 ? 'One pay run is waiting for you' : `${waiting} pay runs are waiting for you`;
+  $('#runs').innerHTML = parts.join('') || '<p class="empty">The clerk staged nothing this time.</p>';
+  const other = (dec) => items.filter((i) => i.decision === dec || (dec === 'HOLD' && i.decision === 'PAYABLE' && i.skip && !i.run_id && i.skip.startsWith('over')));
+  const card = (i, cls, label) => `<div class="item"><span class="verdict ${cls}">${label}</span><strong>${esc(i.proposed.vendor || i.file)}</strong>
+    ${i.proposed.amount ? ' · ' + esc(i.proposed.amount) + ' ' + esc(i.proposed.currency || '') : ''}<ul>${[...(i.reasons || []), ...(i.warnings || []), ...(i.skip ? [i.skip] : [])].map((r) => `<li>${esc(r)}</li>`).join('')}</ul></div>`;
+  $('#hold').innerHTML = other('HOLD').map((i) => card(i, 'v-hold', i.decision === 'PAYABLE' ? 'Over the clerk\'s limit' : i.cop === 'CLOSE_MATCH' ? 'Name is close, not exact' : i.cop === 'NO_MATCH' ? 'Unknown vendor' : 'Not found in the invoice')).join('') || '<p class="empty">Nothing waiting.</p>';
+  $('#stop').innerHTML = other('BLOCK').map((i) => card(i, 'v-stop', 'Stopped')).join('') || '<p class="empty">Nothing stopped.</p>';
+}
+async function connect() {
+  if (!window.ethereum) { $('#net').textContent = 'No browser wallet found'; return; }
+  wallet = createWalletClient({ transport: custom(window.ethereum) });
+  [account] = await wallet.requestAddresses();
+  chainId = await wallet.getChainId();
+  $('#net').textContent = (CHAINS[chainId]?.name || `Chain ${chainId} (switch to Aevum testnet)`) + ', ' + short(account);
+  $('#connect').textContent = 'Connected';
+}
+document.addEventListener('click', async (ev) => {
+  const b = ev.target.closest('button[data-act]'); if (!b) return;
+  if (!wallet) await connect(); if (!wallet) return;
+  const id = BigInt(b.dataset.run), out = $('#tx-' + b.dataset.run); out.hidden = false;
+  try {
+    const args = b.dataset.act === 'reject' ? [id, prompt('Why are you rejecting this run?') || 'rejected by the owner'] : [id];
+    out.textContent = b.dataset.act === 'execute' ? 'Paying… confirm in your wallet.' : 'Rejecting… confirm in your wallet.';
+    const owner = await pub().readContract({ address: report.payrun, abi: ABI, functionName: 'owner' });
+    let hash;
+    if ((await pub().getBytecode({ address: owner }))?.length > 2) {   // smart-account owner: sign a UserOperation
+      out.textContent += ' (signing for the smart account ' + short(owner) + ')';
+      hash = await viaSmartAccount(owner, encodeFunctionData({ abi: ABI, functionName: b.dataset.act, args }));
+    } else {
+      hash = await wallet.writeContract({ account, chain: null, address: report.payrun, abi: ABI, functionName: b.dataset.act, args, type: 'legacy' });
+      await pub().waitForTransactionReceipt({ hash });
+    }
+    const ex = CHAINS[chainId]?.explorer;
+    notes[b.dataset.run] = (b.dataset.act === 'execute' ? 'Paid. ' : 'Rejected. ') + (ex ? `<a href="${ex}/tx/${hash}" target="_blank" rel="noopener">View transaction</a>` : 'Transaction ' + esc(hash));
+    await render();
+  } catch (e) { out.textContent = 'Not sent: ' + (e.shortMessage || e.message || e); }
+});
+$('#connect').onclick = connect;
+$('#file').onchange = async (e) => { report = JSON.parse(await e.target.files[0].text()); $('#loader').hidden = true; render(); };
+const src = new URLSearchParams(location.search).get('report');
+// Hosted (GitHub Pages): with no ?report=, the page opens the latest testnet run in report.json next to it.
+const def = src ? null : await fetch('report.json').then((r) => (r.ok ? r.json() : null)).catch(() => null);
+if (src) { report = await (await fetch(src)).json(); render(); } else if (def) { report = def; render(); } else { $('#loader').hidden = false; }
+</script></body></html>

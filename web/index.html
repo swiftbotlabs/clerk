@@ -121,7 +121,7 @@ async function render() {
   const other = (dec) => items.filter((i) => i.decision === dec || (dec === 'HOLD' && i.decision === 'PAYABLE' && i.skip && !i.run_id && i.skip.startsWith('over')));
   const card = (i, cls, label) => `<div class="item"><span class="verdict ${cls}">${label}</span><strong>${esc(i.proposed.vendor || i.file)}</strong>
     ${i.proposed.amount ? ' · ' + esc(i.proposed.amount) + ' ' + esc(i.proposed.currency || '') : ''}<ul>${[...(i.reasons || []), ...(i.warnings || []), ...(i.skip ? [i.skip] : [])].map((r) => `<li>${esc(r)}</li>`).join('')}</ul></div>`;
-  $('#hold').innerHTML = other('HOLD').map((i) => card(i, 'v-hold', i.decision === 'PAYABLE' ? 'Over the clerk\'s limit' : 'Name is close, not exact')).join('') || '<p class="empty">Nothing waiting.</p>';
+  $('#hold').innerHTML = other('HOLD').map((i) => card(i, 'v-hold', i.decision === 'PAYABLE' ? 'Over the clerk\'s limit' : i.cop === 'CLOSE_MATCH' ? 'Name is close, not exact' : i.cop === 'NO_MATCH' ? 'Unknown vendor' : 'Not found in the invoice')).join('') || '<p class="empty">Nothing waiting.</p>';
   $('#stop').innerHTML = other('BLOCK').map((i) => card(i, 'v-stop', 'Stopped')).join('') || '<p class="empty">Nothing stopped.</p>';
 }
 async function connect() {
@@ -156,5 +156,7 @@ document.addEventListener('click', async (ev) => {
 $('#connect').onclick = connect;
 $('#file').onchange = async (e) => { report = JSON.parse(await e.target.files[0].text()); $('#loader').hidden = true; render(); };
 const src = new URLSearchParams(location.search).get('report');
-if (src) { report = await (await fetch(src)).json(); render(); } else { $('#loader').hidden = false; }
+// Hosted (GitHub Pages): with no ?report=, the page opens the latest testnet run in report.json next to it.
+const def = src ? null : await fetch('report.json').then((r) => (r.ok ? r.json() : null)).catch(() => null);
+if (src) { report = await (await fetch(src)).json(); render(); } else if (def) { report = def; render(); } else { $('#loader').hidden = false; }
 </script></body></html>
