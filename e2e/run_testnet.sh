@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 R=${AEVUM_RPC:-https://rpc-test.qday.info}; REG=0xF45E7f39Caba1d2055f613970575a7e7069636Be; TUSD=0x456569838f1d43009A91ebA4263147Afd7233483
-KEYS=${KEYS:-/home/agent/agent/secrets/aevum_testnet_keys.json}; ST=testnet.json; [ -f $ST ] || echo '{}' > $ST
+KEYS=${KEYS:?set KEYS to a JSON file of TESTNET-ONLY keys}; ST=testnet.json; [ -f $ST ] || echo '{}' > $ST
 k() { python3 -c "import json;print(json.load(open('$KEYS'))['$1']['private_key'])"; }
 addr() { python3 -c "import json;print(json.load(open('$KEYS'))['$1']['address'])"; }
 get() { python3 -c "import json;print(json.load(open('$ST')).get('$1',''))"; }
