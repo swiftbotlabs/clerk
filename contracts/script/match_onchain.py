@@ -6,16 +6,19 @@ it compiles src/PayRun.sol with the pinned compiler (forge build), reads the dep
 immutables (token, registry) with the values the deployed contract reports, and compares byte for byte, metadata hash included.
 The metadata hash commits to the exact source text and compiler settings, so a full match means: this source, this compiler.
 
-  python3 script/match_onchain.py [address] [--rpc https://rpc-test.qday.info]
+  python3 script/match_onchain.py [address] [--rpc https://rpc-test.qday.info]      (PayRun)
+  CONTRACT=PayRunV2 python3 script/match_onchain.py [address]                         (PayRunV2; default address from e2e/testnet_v2.json)
 """
-import json, subprocess, sys, urllib.request
+import json, os, subprocess, sys, urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
 rpc = sys.argv[sys.argv.index("--rpc") + 1] if "--rpc" in sys.argv else "https://rpc-test.qday.info"
 if "--rpc" in sys.argv: args.remove(rpc)
-addr = args[0] if args else json.load(open(HERE.parent / "e2e/testnet.json"))["payrun"]
+NAME = os.environ.get("CONTRACT", "PayRun")
+addr = args[0] if args else (json.load(open(HERE.parent / "e2e/testnet_v2.json"))["payrun_v2"] if NAME == "PayRunV2"
+                             else json.load(open(HERE.parent / "e2e/testnet.json"))["payrun"])
 
 def call(method, params):
     req = urllib.request.Request(rpc, data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode(),
@@ -25,12 +28,12 @@ def call(method, params):
     return r["result"]
 
 subprocess.run(["forge", "build", "--silent"], cwd=HERE, check=True)
-art = json.load(open(HERE / "out/PayRun.sol/PayRun.json"))
+art = json.load(open(HERE / f"out/{NAME}.sol/{NAME}.json"))
 local = bytearray.fromhex(art["deployedBytecode"]["object"][2:])
 onchain = bytes.fromhex(call("eth_getCode", [addr, "latest"])[2:])
 if not onchain: raise SystemExit(f"FAIL: no code at {addr}")
 # immutables: token() = 0xfc0c546a, registry() = 0x7b103999; ids in immutableReferences follow the declaration order in the AST
-# the artifact has no AST; immutable ids follow declaration order (token is declared before registry in PayRun.sol)
+# the artifact has no AST; immutable ids follow declaration order (token is declared before registry in both contracts)
 names = dict(zip(sorted(int(k) for k in art["deployedBytecode"]["immutableReferences"]), ["token", "registry"]))
 sel = {"token": "0xfc0c546a", "registry": "0x7b103999"}
 for ref, spots in art["deployedBytecode"]["immutableReferences"].items():

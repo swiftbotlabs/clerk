@@ -25,7 +25,7 @@ flowchart LR
 | Path | What it does |
 |---|---|
 | `contracts/src/PayRun.sol` | Staging-only session keys (expiry, per-run cap, per-day cap, revoke), `stage()` with on-chain Confirmation of Payee, pay-once invoices, owner `execute()` / `reject()`, 7-day run expiry, `headroom()` view. Shanghai EVM. |
-| `contracts/src/PayRunV2.sol` | PayRun plus the **payee-change hold** (below). Same staging, caps and approval flow. In the repo and tested; the testnet deployment is still the first PayRun |
+| `contracts/src/PayRunV2.sol` | PayRun plus the **payee-change hold** (below). Same staging, caps and approval flow. In the repo, tested, and deployed on testnet next to the first PayRun (below) |
 | `contracts/test/` | 9 unit tests, 10 property tests (5 fuzzed at 256 runs: run cap, day cap, wrong payee for any address and agent id, owner-only actions for any caller, exact totals) + fork tests against the real Aevum ERC-8004 registry, EntryPoint v0.7 and Kernel v3.1 |
 | `contracts/test/PayRunV2*.t.sol` | 38 tests for PayRunV2: the 19 above re-run against it, plus 19 for the hold (4 fuzzed, including A to B to A) |
 | `contracts/script/hold_controls.sh` | Revert control: switches each hold rule off in turn, expects tests to fail, restores the source byte for byte, expects all green |
@@ -98,7 +98,10 @@ How we test it:
   itself, trust ending on a change, owner-only confirmation, confirmation for runs staged during a hold, and the changed-since-staging
   check.
 
-The testnet PayRun above is the first version. PayRunV2 is not deployed yet.
+On testnet (20 Nov 18:18Z, `e2e/deploy_v2_testnet.sh`, record in `e2e/testnet_v2.json`): PayRunV2 saw Acme's registered wallet for the
+first time and started a 24-hour hold; the owner (the Kernel smart account) then confirmed Acme in a UserOperation and the early release was
+logged. `agent/reconcile.py --payrun 0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541 --from-block 3682602` prints the four ALERT lines. A payment
+blocked by a hold is shown in the tests and in `e2e/hold_local.sh`, not on testnet.
 
 ## Run it
 Requirements: Foundry (`forge`, `cast`, `anvil`), Python 3.11+, a Solidity 0.8.24+ compiler (set `solc` in `contracts/foundry.toml`).
@@ -133,6 +136,9 @@ Environment: `AEVUM_RPC` (default `https://rpc-test.qday.info`), `AEVUM_REGISTRY
 | Run 1 paid by the owner (UserOperation) | [0xdde4f5aa…](https://explorer-test.qday.info/tx/0xdde4f5aaac0670d846bb41a28293cd81c37526087d428b917f1b39f83bf4c2f9): Acme +1.20, Globex +0.80 tUSD8; reconcile PAID_OK x2, INV-1002 UNPAID |
 | Run 2 paid from the approval page | stage [0x844395b6…](https://explorer-test.qday.info/tx/0x844395b6c1f59875246e2cac4988bbc3d3ac34523b68adf12140a33a201cb188), paid [0x1c6f44e3…](https://explorer-test.qday.info/tx/0x1c6f44e3f0fa120b0912da08973b44f6bad39588a66b4af082b424f0681468fc): INV-1004 0.30 to Acme |
 | Run 3 paid from the approval page | stage [0x24f2d55b…](https://explorer-test.qday.info/tx/0x24f2d55b9a0c2f2edf17c6215c6ff324336ebb50c7c58b74b2012885ae423b33), paid [0xf01567cd…](https://explorer-test.qday.info/tx/0xf01567cde9d18e6d06de1c473de937b41a9ec6c8bdb6cc8b25452f2df4e83303): INV-1006 0.25 to Acme + G-79 0.20 to Globex; a prompt-injected redirect invoice stopped, a look-alike vendor held |
+| PayRunV2 (payee-change hold) | [`0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541`](https://explorer-test.qday.info/address/0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541) (deploy [0x9f98fa47…](https://explorer-test.qday.info/tx/0x9f98fa4750cf78c4367b31e4cc886393a67820718802094c4b7eaaae44350ca5), block 3682602), owner and treasury = the same Kernel account |
+| Hold started on a wallet V2 had never seen | [0xc8472b00…](https://explorer-test.qday.info/tx/0xc8472b00a63946569954436dff3a0099b28a4e24a32b6e89e61430080b107a07): `observePayee(1698)` -> PayeeChanged (none -> Acme's wallet) + HoldStarted (24 h) |
+| Owner confirms the payee early (UserOperation) | [0x1353239c…](https://explorer-test.qday.info/tx/0x1353239ca2467412fc843090be685e608af91b1967975fcb1ebf7381b3813316): PayeeConfirmed + HoldReleased (early) |
 
 Live refusals on testnet (eth_call against the deployed PayRun, 20 Nov): the clerk's key calling `execute(3)` -> `NotOwner`; the clerk staging 5.00 -> `RunCapExceeded(5000000, 2500000)`; the clerk staging Acme's agentId with the attacker's wallet -> `PayeeNotRegistered`; a stranger staging -> `NoSession`; the owner's bare key (not the smart account) -> `NotOwner`; the smart account paying run 3 again -> `NotStaged(3)`.
 
@@ -140,7 +146,7 @@ Approval page: https://clerk.swiftbotlab.workers.dev/ (the latest testnet run; c
 
 **Verified source.** The testnet explorer's verifier lists no compiler versions yet, so `contracts/script/match_onchain.py` does the check:
 on 20 Nov it compiled `src/PayRun.sol` (solc 0.8.34, Shanghai, 200 optimizer runs), filled the two immutables with the values the deployed
-contract reports (tUSD8, the ERC-8004 registry) and found the 6,462-byte runtime code on chain **identical, metadata hash included**. The
+contract reports (tUSD8, the ERC-8004 registry) and found the 6,462-byte runtime code on chain **identical, metadata hash included**. `CONTRACT=PayRunV2 python3 script/match_onchain.py` does the same for PayRunV2 (11,389 bytes, identical, checked 21 Nov). The
 metadata hash commits to the exact source text and settings. We will also verify on the explorer once its verifier works.
 
 Every hash is also in `e2e/testnet.json`; `e2e/run_testnet.sh` reproduces the run and skips steps already done.
