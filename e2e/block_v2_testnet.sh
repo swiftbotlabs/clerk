@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Show a payment BLOCKED by the payee-change hold on Aevum TESTNET (chain 44005), with PayRunV2 from deploy_v2_testnet.sh:
-#   1) one UserOperation from the Kernel owner: approve PayRunV2 for 1.00 tUSD8 + grant the clerk a staging-only session key on V2
+#   1) one UserOperation from the Kernel owner (through QDay's bundler, bundler.qday.info): approve PayRunV2 for 1.00 tUSD8 + grant the clerk a staging-only session key on V2
 #   2) the clerk stages one 0.10 tUSD8 line to Globex (#1699), a vendor V2 has never seen -> PayeeChanged + HoldStarted + StagedOnHold
-#   3) the owner tries to pay it (UserOperation execute) -> PaymentBlocked (reason 1 = BLOCK_HOLD); nothing is paid; the run stays staged
+#   3) the owner tries to pay it (UserOperation execute, also through the bundler) -> PaymentBlocked (reason 1 = BLOCK_HOLD); nothing is paid; the run stays staged
 # Testnet gas only, no tUSD8 moves. Keys from $KEYS (TESTNET-ONLY, never printed). Idempotent: state in testnet_v2.json.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -30,10 +30,13 @@ CHAIN_OK=${CHAIN:-44005}; [ "$(cast chain-id --rpc-url $R)" = "$CHAIN_OK" ] || {
 V2=$(get payrun_v2); [ -n "$V2" ] || { echo "run deploy_v2_testnet.sh first"; exit 1; }
 TREAS=$(v1 kernel_account); GLOBEX_ID=${GLOBEX_ID:-$(v1 globex_id)}; CLERK=$(addr clerk); OWNER_KEY=$(k owner)
 source ./kernel.sh
+# The owner's UserOperations go through QDay's own bundler by default (BUNDLER= empty: the owner key submits handleOps itself).
+BUNDLER=${BUNDLER-https://bundler.qday.info}
+uop() { if [ -n "$BUNDLER" ]; then kernel_op_bundler $R $BUNDLER $OWNER_KEY $TREAS "$1"; else kernel_op $R $OWNER_KEY $TREAS "$1"; fi; }
 NOW=$(cast block latest --field timestamp --rpc-url $R)
 if [ -z "$(get block_grant_tx)" ]; then
   GRANT=$(cast calldata "grantSession(address,uint64,uint128,uint128)" $CLERK $((NOW+7*86400)) 500000 1000000)
-  put block_grant_tx $(kernel_op $R $OWNER_KEY $TREAS "$(kernel_batch "$TUSD:$(cast calldata 'approve(address,uint256)' $V2 1000000)" "$V2:$GRANT")")
+  put block_grant_tx $(uop "$(kernel_batch "$TUSD:$(cast calldata 'approve(address,uint256)' $V2 1000000)" "$V2:$GRANT")")
 fi
 echo "grant (UserOp) $(get block_grant_tx): $(events $(get block_grant_tx))"
 W=$(cast call $REG 'getAgentWallet(uint256)(address)' $GLOBEX_ID --rpc-url $R)
@@ -47,7 +50,7 @@ RUN=$(get block_run); echo "stage $(get block_stage_tx) run $RUN: $(events $(get
 echo "canExecute($RUN): $(cast call $V2 'canExecute(uint256)(bool,uint256,uint8,uint64)' $RUN --rpc-url $R | tr '\n' ' ')"
 if [ -z "$(get block_execute_tx)" ]; then
   B0=$(cast call $TUSD 'balanceOf(address)(uint256)' $W --rpc-url $R | awk '{print $1}')
-  put block_execute_tx $(kernel_op $R $OWNER_KEY $TREAS "$(kernel_single $V2 "$(cast calldata 'execute(uint256)' $RUN)")")
+  put block_execute_tx $(uop "$(kernel_single $V2 "$(cast calldata 'execute(uint256)' $RUN)")")
   B1=$(cast call $TUSD 'balanceOf(address)(uint256)' $W --rpc-url $R | awk '{print $1}')
   put block_globex_balance_change $((B1-B0))
 fi

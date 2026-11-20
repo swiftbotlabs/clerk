@@ -54,3 +54,49 @@ ev=[l for l in r["logs"] if l["topics"][0]==T]
 assert ev and int(ev[0]["data"][2+64:2+128],16)==1, "UserOperation reverted inside the account"
 print(r["transactionHash"])'
 }
+
+# kernel_op_bundler <rpc> <bundler url> <owner key> <account> <account calldata>: the same UserOperation, but sent through a bundler
+# (QDay's own: https://bundler.qday.info, EntryPoint v0.7) with eth_sendUserOperation instead of our own handleOps. Gas limits come
+# from eth_estimateUserOperationGas (signed: Kernel rejects stub signatures), the owner key signs the final hash, and we wait for the bundler's receipt.
+# Prints the transaction hash that included it. The account pays gas from its EntryPoint deposit or balance.
+kernel_op_bundler() {
+  local rpc=$1 bun=$2 key=$3 acct=$4 data=$5
+  python3 - "$rpc" "$bun" "$key" "$acct" "$data" "$EP" "$OP_T" <<'PY'
+import json, subprocess, sys, time, urllib.request
+rpc, bun, key, acct, data, ep, opt = sys.argv[1:8]
+def call(url, method, params):
+    r = urllib.request.Request(url, data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode(),
+                               headers={"content-type": "application/json", "user-agent": "clerk-e2e/1"})
+    out = json.load(urllib.request.urlopen(r, timeout=60))
+    if "error" in out: raise SystemExit(f"{method}: {out['error']}")
+    return out["result"]
+cast = lambda *a: subprocess.check_output(["cast", *a]).decode().strip()
+nonce = int(cast("call", ep, "getNonce(address,uint192)(uint256)", acct, "0", "--rpc-url", rpc).split()[0])
+prio = int(int(call(bun, "rundler_maxPriorityFeePerGas", []), 16) * 11 // 10)   # the bundler's floor + 10%
+base = int(call(rpc, "eth_getBlockByNumber", ["latest", False]).get("baseFeePerGas") or "0x0", 16)
+fee = max(2 * base + prio, prio)
+op = {"sender": acct, "nonce": hex(nonce), "callData": data, "callGasLimit": "0x0", "verificationGasLimit": "0x0",
+      "preVerificationGas": "0x0", "maxFeePerGas": hex(fee), "maxPriorityFeePerGas": hex(prio),
+      "signature": "0x"}
+def sign(op):   # Kernel's ECDSA validator reverts on a bad signature (AA23), so even the estimate needs a real one
+    packed = (f"({acct},{nonce},0x,{data},0x{int(op['verificationGasLimit'],16):032x}{int(op['callGasLimit'],16):032x},"
+              f"{int(op['preVerificationGas'],16)},0x{prio:032x}{fee:032x},0x,0x)")
+    op["signature"] = cast("wallet", "sign", "--private-key", key, cast("call", ep, f"getUserOpHash({opt})(bytes32)", packed, "--rpc-url", rpc))
+sign(op)
+est = call(bun, "eth_estimateUserOperationGas", [op, ep])
+for k in ("callGasLimit", "verificationGasLimit", "preVerificationGas"):
+    op[k] = hex(int(int(est[k], 16) * 13 // 10))            # 30% headroom over the bundler's estimate
+sign(op)
+if len(sys.argv) > 8 or __import__("os").environ.get("BUNDLER_DRY"):
+    print("DRY estimate ok", json.dumps(est)); sys.exit(0)
+uoh = call(bun, "eth_sendUserOperation", [op, ep])
+for _ in range(60):
+    rc = call(bun, "eth_getUserOperationReceipt", [uoh])
+    if rc:
+        assert rc.get("success") in (True, "0x1", 1), f"UserOperation reverted inside the account: {uoh}"
+        print(rc["receipt"]["transactionHash"]); break
+    time.sleep(3)
+else:
+    raise SystemExit(f"no receipt for {uoh} after 180 s")
+PY
+}
