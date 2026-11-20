@@ -101,7 +101,7 @@ How we test it:
 On testnet (20 Nov 18:18Z, `e2e/deploy_v2_testnet.sh`, record in `e2e/testnet_v2.json`): PayRunV2 saw Acme's registered wallet for the
 first time and started a 24-hour hold; the owner (the Kernel smart account) then confirmed Acme in a UserOperation and the early release was
 logged. `agent/reconcile.py --payrun 0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541 --from-block 3682602` prints the four ALERT lines. A payment
-blocked by a hold is shown in the tests and in `e2e/hold_local.sh`, not on testnet.
+blocked by the hold is on testnet too: `e2e/block_v2_testnet.sh` (Globex, new to V2: staged on hold, the owner's pay attempt -> PaymentBlocked, nothing paid).
 
 ## Run it
 Requirements: Foundry (`forge`, `cast`, `anvil`), Python 3.11+, a Solidity 0.8.24+ compiler (set `solc` in `contracts/foundry.toml`).
@@ -139,6 +139,7 @@ Environment: `AEVUM_RPC` (default `https://rpc-test.qday.info`), `AEVUM_REGISTRY
 | PayRunV2 (payee-change hold) | [`0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541`](https://explorer-test.qday.info/address/0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541) (deploy [0x9f98fa47…](https://explorer-test.qday.info/tx/0x9f98fa4750cf78c4367b31e4cc886393a67820718802094c4b7eaaae44350ca5), block 3682602), owner and treasury = the same Kernel account |
 | Hold started on a wallet V2 had never seen | [0xc8472b00…](https://explorer-test.qday.info/tx/0xc8472b00a63946569954436dff3a0099b28a4e24a32b6e89e61430080b107a07): `observePayee(1698)` -> PayeeChanged (none -> Acme's wallet) + HoldStarted (24 h) |
 | Owner confirms the payee early (UserOperation) | [0x1353239c…](https://explorer-test.qday.info/tx/0x1353239ca2467412fc843090be685e608af91b1967975fcb1ebf7381b3813316): PayeeConfirmed + HoldReleased (early) |
+| Payment blocked by the hold (Globex, new to V2) | session grant [0xe19ec4c1…](https://explorer-test.qday.info/tx/0xe19ec4c148207ab5aa906e29f932e067121bcc731c8eca1b53f660dcbe532a35) · staged on hold [0xe6e5f256…](https://explorer-test.qday.info/tx/0xe6e5f2560477868cd22893ae8cbb78e6b8580f8e4b6ebf43658767fa0d4a13e9) · owner's pay attempt [0xdfc4b2ad…](https://explorer-test.qday.info/tx/0xdfc4b2add2348a0c2253b6b37568b8539bb706a024e45f3fdaa0c5549ad83a1a) -> PaymentBlocked (reason 1, hold), nothing paid. Both owner UserOperations went through QDay's bundler (`e2e/block_v2_testnet.sh`) |
 
 Live refusals on testnet (eth_call against the deployed PayRun, 20 Nov): the clerk's key calling `execute(3)` -> `NotOwner`; the clerk staging 5.00 -> `RunCapExceeded(5000000, 2500000)`; the clerk staging Acme's agentId with the attacker's wallet -> `PayeeNotRegistered`; a stranger staging -> `NoSession`; the owner's bare key (not the smart account) -> `NotOwner`; the smart account paying run 3 again -> `NotStaged(3)`.
 
