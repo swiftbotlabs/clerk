@@ -25,7 +25,8 @@ flowchart LR
 | Path | What it does |
 |---|---|
 | `contracts/src/PayRun.sol` | Staging-only session keys (expiry, per-run cap, per-day cap, revoke), `stage()` with on-chain Confirmation of Payee, pay-once invoices, owner `execute()` / `reject()`, 7-day run expiry, `headroom()` view. Shanghai EVM. |
-| `contracts/test/` | 9 unit tests + fork tests against the real Aevum ERC-8004 registry, EntryPoint v0.7 and Kernel v3.1 |
+| `contracts/test/` | 9 unit tests, 10 property tests (5 fuzzed at 256 runs: run cap, day cap, wrong payee for any address and agent id, owner-only actions for any caller, exact totals) + fork tests against the real Aevum ERC-8004 registry, EntryPoint v0.7 and Kernel v3.1 |
+| `contracts/script/match_onchain.py` | Shows the deployed PayRun is this source: compiles it, reads the runtime bytecode from the chain, compares byte for byte (metadata hash included) |
 | `agent/check.py` | Fail-closed checks between an invoice and the line a model proposed (12 tests) |
 | `agent/stage.py` | `plan` / `stage`: extract, check, dedupe by `keccak256(file)` on chain, pack within the key's headroom, simulate, send with retries and a landed-check (idempotent) |
 | `agent/reconcile.py` | `Paid` events in 1,000-block chunks, matched to `ledger.csv` |
@@ -59,7 +60,8 @@ implementation (`0xBAC849bB641841b44E965fB01A4Bf5F074f84b4D`), Kernel's ECDSA va
 Requirements: Foundry (`forge`, `cast`, `anvil`), Python 3.11+, a Solidity 0.8.24+ compiler (set `solc` in `contracts/foundry.toml`).
 
 ```bash
-cd contracts && forge test                                   # unit tests
+cd contracts && forge test --no-match-path 'test/fork/*'    # 19 unit + property tests
+python3 script/match_onchain.py                              # deployed bytecode == this source
 forge test --match-path 'test/fork/*' --fork-url https://rpc-test.qday.info   # against the real registry
 cd ../agent/tests && python3 test_check.py                   # check.py
 cd ../../e2e && ./run_fork.sh                                 # full flow on a local fork (chain 440050)
@@ -90,7 +92,22 @@ Live refusals on testnet (eth_call against the deployed PayRun, 20 Nov): the cle
 
 Approval page: https://clerk.swiftbotlab.workers.dev/ (the latest testnet run; connect a wallet that owns PayRun to approve). It only sends approvals to the PayRun above, only opens reports from its own site, and loads viem from a vendored copy (`docs/vendor/viem-2.21.0.js`, sha256 `9186bb2d03bf7806da094a3686ef5606e2fb74acbdd04d01806e67aed8706bfb`, from esm.sh viem@2.21.0 es2022 bundle).
 
+**Verified source.** The testnet explorer's verifier lists no compiler versions yet, so `contracts/script/match_onchain.py` does the check:
+on 20 Nov it compiled `src/PayRun.sol` (solc 0.8.34, Shanghai, 200 optimizer runs), filled the two immutables with the values the deployed
+contract reports (tUSD8, the ERC-8004 registry) and found the 6,462-byte runtime code on chain **identical, metadata hash included**. The
+metadata hash commits to the exact source text and settings. We will also verify on the explorer once its verifier works.
+
 Every hash is also in `e2e/testnet.json`; `e2e/run_testnet.sh` reproduces the run and skips steps already done.
+
+## Notes from building on Aevum
+- The explorer's contract verifier has no compiler list yet; `match_onchain.py` above is our stand-in.
+- Aevum is a Shanghai EVM: compile with `evm_version = "shanghai"` (no MCOPY or transient storage).
+- `eth_getLogs` is capped at 1,000 blocks; `agent/reconcile.py` pages every scan.
+
+## Who pays for this, and how it grows
+A finance team pays per protected pay run (a few cents in stablecoin) or a flat monthly fee; vendors register their payout wallet once on
+ERC-8004 for free, because every registered vendor makes the check stronger for every payer. Distribution: accounting and invoicing tools
+call `stage()` from their "pay bills" flow, and agent frameworks use the staging-only session key pattern for any bill-paying agent.
 
 ## Limits and next steps
 - The owner runs as a Kernel v3.1 smart account in the fork tests and on testnet (above). The agent's session key lives in PayRun (`grantSession`); a Kernel permission validator could hold it inside the account instead.
