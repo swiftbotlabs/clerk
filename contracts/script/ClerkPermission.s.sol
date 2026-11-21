@@ -76,6 +76,23 @@ contract ClerkPermission is Script {
         console2.log("staged run", pr.runCount());
     }
 
+    /// Rehearsal only (an anvil fork of Aevum, broadcast to it): a fresh Kernel account owned by OWNER_PK, funded, with its own
+    /// PayRunV2, so setUpAndStage / checkRefusals / revoke can be rehearsed with real outer gas limits.
+    function rehearsalAccount() external {
+        require(block.chainid == 44005, "Aevum fork only");
+        uint256 pk = vm.envUint("OWNER_PK");
+        vm.startBroadcast(pk);
+        address acct = FACTORY.createAccount(abi.encodeWithSelector(IK.initialize.selector,
+            bytes21(abi.encodePacked(bytes1(0x01), ECDSA_VALIDATOR)), address(0), abi.encodePacked(vm.addr(pk)), bytes(""),
+            new bytes[](0)), bytes32(uint256(4242)));
+        (bool ok,) = payable(acct).call{value: 0.2 ether}("");
+        require(ok);
+        PayRunV2 v2 = new PayRunV2(TUSD8, REG, acct, acct);
+        vm.stopBroadcast();
+        console2.log("REHEARSAL ACCOUNT", acct);
+        console2.log("REHEARSAL PAYRUN", address(v2));
+    }
+
     function checkRefusals() external {
         _env();
         policy = ClerkStagePolicy(vm.envAddress("POLICY"));
@@ -105,7 +122,14 @@ contract ClerkPermission is Script {
     function _setUp(bool broadcast) internal {
         until = uint48(block.timestamp + 7 days);
         if (broadcast) vm.startBroadcast(ownerPk);
-        policy = new ClerkStagePolicy();
+        // POLICY=0x.. reuses an already deployed policy (no second CREATE); otherwise deploy one.
+        address existing = vm.envOr("POLICY", address(0));
+        if (existing != address(0)) {
+            require(existing.code.length > 0 && ClerkStagePolicy(existing).isModuleType(5), "POLICY is not a ClerkStagePolicy");
+            policy = ClerkStagePolicy(existing);
+        } else {
+            policy = new ClerkStagePolicy();
+        }
         _send(_rootOp(abi.encodeWithSelector(IK.execute.selector, bytes32(0), abi.encodePacked(address(pr), uint256(0),
             abi.encodeWithSelector(PayRunV2.grantSession.selector, account, uint64(until), RUN_CAP, DAY_CAP)))));
         if (broadcast) vm.stopBroadcast();
@@ -157,15 +181,20 @@ contract ClerkPermission is Script {
         ops[0] = op;
     }
 
+    /// Outer gas for handleOps: the op's own limits + EntryPoint overhead. EntryPoint v0.7 refuses to start the call phase
+    /// ("AA95 out of gas") when the outer transaction can't cover callGasLimit, and forge's estimate doesn't see that, so the
+    /// limit is set explicitly. Also pass --gas-estimate-multiplier 200 (task runbook) as a second margin.
     function _send(PackedUserOperation memory op) internal {
-        EP.handleOps(_ops(op), payable(vm.addr(ownerPk)));
+        uint256 limits = uint256(op.accountGasLimits);
+        uint256 outer = (limits >> 128) + uint128(limits) + op.preVerificationGas + 300_000;
+        EP.handleOps{gas: outer}(_ops(op), payable(vm.addr(ownerPk)));
     }
 
     function _base(bytes memory callData, uint256 nonce) internal view returns (PackedUserOperation memory op) {
         op.sender = account;
         op.nonce = nonce;
         op.callData = callData;
-        op.accountGasLimits = bytes32((uint256(1_500_000) << 128) | 1_500_000);
+        op.accountGasLimits = bytes32((uint256(1_000_000) << 128) | 600_000);   // verification (enable mode installs) | call
         op.preVerificationGas = 80_000;
         op.gasFees = bytes32((uint256(2 gwei) << 128) | 2 gwei);
     }
