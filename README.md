@@ -67,6 +67,35 @@ implementation (`0xBAC849bB641841b44E965fB01A4Bf5F074f84b4D`), Kernel's ECDSA va
 | Audit | `Paid(runId, line, invoiceHash, ref, payeeAgentId, payee, amount)` + reconciliation | `reconcile.py` |
 | Vendor's wallet swapped in the registry ("new bank details") | First payment to a new or changed wallet is held until the window passes or the owner confirms it | `PayRunV2` (below) |
 
+## The clerk's key inside the smart account (Kernel permission)
+The clerk's key can also live **inside** the owner's Kernel v3.1 account, as a Kernel *permission*. That is a signer plus a policy,
+enabled by the owner's EIP-712 "Enable" signature:
+- **Signer:** ZeroDev's `ECDSASigner`, already deployed on Aevum at `0x6A6F069E2a08c2468e7724Ab3250CdBFBA14D4FF`, bound to the clerk's key.
+- **Policy:** `contracts/src/ClerkStagePolicy.sol`. A UserOperation signed under the permission passes only when it is one call, from
+  the account, to `PayRunV2.stage(lines)` on our PayRun, with no value and a run total within the per-run cap. The key's expiry is
+  returned as `validUntil`, so the EntryPoint enforces it.
+  - Refused: `execute` (pay), token transfers, batches, delegatecall, any other target or selector, and ERC-1271 signatures.
+  - **Gas is money too.** The clerk signs the UserOperation's gas fields and the account pays them, so the policy refuses any paymaster
+    and caps `maxFeePerGas`. It also keeps a running wei budget per permission: each op's worst-case cost (all gas limits × max fee)
+    comes out of it at validation, even if `stage` later reverts.
+  - Kernel refuses all of these at validation (`AA23 reverted: PolicyFailed(0)`); the op never executes.
+  - **What the budget does not remove:** gas is paid to whoever bundles the clerk's operations, and that can be the clerk itself. So up
+    to `gasBudget` can end up with the clerk, for example by staging runs that revert. The budget bounds that amount; size it as money
+    the clerk could take. On mainnet, also cap gas per operation.
+- **PayRunV2 still checks on its side:** the owner makes the account its own staging session (`grantSession(account, …)`), so PayRun's
+  caps, expiry and payee checks still apply when `stage` runs. Every limit is checked twice, and only the owner's root key can pay.
+- **Revoke:** one owner UserOperation (`uninstallValidation`) removes an installed permission at once. An Enable signature the clerk
+  hasn't used yet is killed with `invalidateNonce(currentNonce + 1)`, also one owner UserOperation; that revokes every non-root
+  permission. A used Enable signature can't be replayed to reset the budget, because Kernel binds it to the account's `currentNonce`
+  (fork test).
+
+| Check | Where |
+|---|---|
+| 21 unit tests (2 fuzzed): stage within cap passes with the key's expiry; over cap, 26 lines, `execute`, transfer, another target, value, batch / delegatecall / mode payload, `executeUserOp`, other accounts, uninstalled (even an all-zero op), ERC-1271, a paymaster, a fee over the max and a gas-drain op all fail; the budget runs out; a 25-line run validates in under 200k gas; truncated stage arguments are refused | `contracts/test/ClerkStagePolicy.t.sol` |
+| 7 fork tests on Aevum testnet state (real EntryPoint v0.7, Kernel v3.1 factory, ECDSA validator, ECDSASigner): enable + stage in the clerk's first UserOperation; pay, transfer, over-cap, gas drain and paymaster refused with `PolicyFailed(0)`; revoke, then refused; a replayed Enable signature can't reset the budget; the owner's root key still pays | `contracts/test/fork/ClerkPermissionFork.t.sol` |
+| Revert controls, 14 mutants (allow-all, mode, target, selector, value, cap, line count, length rewrite, expiry, installed, paymaster, fee, budget, budget spend): each compiles and turns the suites red, and the restored source is green | `contracts/script/clerk_controls.sh` (`FORK=1` adds the fork suite) |
+| Testnet runner: deploy, enable + stage, refusals simulated against live state, revoke | `contracts/script/ClerkPermission.s.sol` |
+
 ## Payee-change hold (PayRunV2)
 The registry check stops a clerk from paying an address the vendor never registered. It can't stop an attacker who takes over the
 vendor's identity and registers a new wallet. PayRunV2 adds a hold for that case:
@@ -169,7 +198,7 @@ ERC-8004 for free, because every registered vendor makes the check stronger for 
 call `stage()` from their "pay bills" flow, and agent frameworks use the staging-only session key pattern for any bill-paying agent.
 
 ## Limits and next steps
-- The owner runs as a Kernel v3.1 smart account in the fork tests and on testnet (above). The agent's session key lives in PayRun (`grantSession`); a Kernel permission validator could hold it inside the account instead.
+- The owner runs as a Kernel v3.1 smart account in the fork tests and on testnet (above). The clerk's key can sit in PayRun (`grantSession`) or inside the account as a Kernel permission (above). The permission's per-day cap is PayRun's; validation can't read the clock, so the policy enforces the per-run cap and the expiry only.
 - The daily cap counts staged amounts (rejected runs still count), which is deliberately conservative.
 - PDF and image invoices need a text layer first (pdftotext / OCR) before `check.py` can verify numbers.
 
