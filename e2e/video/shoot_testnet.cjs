@@ -1,6 +1,6 @@
 // Stills of the approval page paying staged run 2 on the REAL Aevum testnet (signer_proxy.py on :8556 holds the testnet owner key).
 const { chromium } = require('playwright');
-const OUT = process.env.OUT || '/data/aevum/film/shots';
+const OUT = process.env.OUT || require('path').join(__dirname, 'shots');
 (async () => {
   const b = await chromium.launch();
   const ctx = await b.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });

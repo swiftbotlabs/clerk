@@ -2,6 +2,10 @@
 
 **Accounts payable with an AI clerk that can't be talked into paying the wrong person.** Built on Aevum testnet (chain 44005) with tUSD8 and the ERC-8004 identity registry.
 
+**Try it:** approval page https://clerk.swiftbotlab.workers.dev/ · demo video (3:01) https://youtu.be/WpnxGX7nYnM ·
+PayRun [`0x2EE2…Da98`](https://explorer-test.qday.info/address/0x2EE29a167CDDb964aAB9C899ea9Ae89847e3Da98) ·
+PayRunV2 [`0x89d1…F541`](https://explorer-test.qday.info/address/0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541) · every transaction in [Aevum testnet](#aevum-testnet).
+
 Invoice-redirection fraud ("we have new bank details, pay this account instead") is the most common way businesses lose money on payables, and AI agents now read the invoices. Clerk lets an AI do the reading and the paperwork while the rules, not the model, decide who gets paid:
 
 - The clerk's key can only **stage** a pay run: under a per-run cap and a per-day cap, before it expires, and only to the wallet each vendor **registered** for its ERC-8004 identity (Confirmation of Payee, checked on chain).
@@ -36,6 +40,8 @@ flowchart LR
 | `web/index.html` | Approval page: each staged line with the invoice line behind every number, held and stopped invoices, approve or reject from the owner's wallet |
 | `e2e/run_fork.sh` | The whole flow on a local fork of Aevum testnet (real registry, real tUSD8) |
 | `e2e/hold_local.sh` | PayRunV2's hold end to end on a local chain: change, block, A to B to A, reconcile, and (`PAGE=1`) confirm and pay from the approval page |
+| `e2e/run_testnet.sh`, `e2e/deploy_v2_testnet.sh`, `e2e/block_v2_testnet.sh` | The testnet runs behind the table below: the paid runs, PayRunV2's deploy with a hold and an early release, and a payment blocked by the hold (owner UserOperations through QDay's bundler) |
+| `e2e/kernel.sh` | ERC-4337 helpers with `cast` only: create the Kernel account, sign and send UserOperations (self-bundled `handleOps`, or `eth_sendUserOperation` to a bundler) |
 
 ## The owner is a smart account (ERC-4337, Kernel v3.1 on Aevum)
 `contracts/test/fork/KernelOwnerFork.t.sol` runs on a fork of Aevum testnet with Aevum's own deployed contracts: EntryPoint v0.7

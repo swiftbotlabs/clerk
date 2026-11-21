@@ -95,7 +95,7 @@ EOF
 if [ "${PAGE:-0}" = 1 ]; then
   python3 -m http.server 8099 --bind 127.0.0.1 --directory .. >/dev/null 2>&1 & HP=$!; sleep 1
   cp "$WORK/report.json" reports/hold_report.json
-  set +e; NODE_PATH=${NODE_PATH:-/data/motion/node_modules} OWNER=$OWNER OUT="$WORK" node video/hold_page_check.cjs; prc=$?; set -e
+  set +e; OWNER=$OWNER OUT="$WORK" node video/hold_page_check.cjs; prc=$?; set -e
   kill $HP 2>/dev/null; rm -f reports/hold_report.json
   [ $prc = 0 ] || fail "page check"
   [ "$(bal $ACME_NEW)" = 50000000 ] || fail "page did not pay Acme's confirmed new wallet"

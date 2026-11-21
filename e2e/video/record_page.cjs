@@ -2,7 +2,7 @@
 // it forwards JSON-RPC to anvil, whose default account 0 (the PayRun owner on the fork) is unlocked, so eth_sendTransaction
 // is signed by anvil. Fork only: nothing here touches the real testnet.
 const { chromium } = require('playwright');
-const OWNER = process.env.OWNER, RPC = 'http://127.0.0.1:8555', OUT = process.env.OUT || '/data/aevum/app/e2e/video/out';
+const OWNER = process.env.OWNER, RPC = 'http://127.0.0.1:8555', OUT = process.env.OUT || require('path').join(__dirname, 'out');
 (async () => {
   const b = await chromium.launch();
   const ctx = await b.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1, recordVideo: { dir: OUT, size: { width: 1280, height: 800 } } });
