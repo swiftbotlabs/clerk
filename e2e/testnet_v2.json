@@ -1,11 +1,21 @@
 {
- "payrun_v2": "0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541",
- "payrun_v2_deploy_tx": "0x9f98fa4750cf78c4367b31e4cc886393a67820718802094c4b7eaaae44350ca5",
- "observe_tx": "0xc8472b00a63946569954436dff3a0099b28a4e24a32b6e89e61430080b107a07",
- "confirm_tx": "0x1353239ca2467412fc843090be685e608af91b1967975fcb1ebf7381b3813316",
- "block_grant_tx": "0xe19ec4c148207ab5aa906e29f932e067121bcc731c8eca1b53f660dcbe532a35",
- "block_stage_tx": "0xe6e5f2560477868cd22893ae8cbb78e6b8580f8e4b6ebf43658767fa0d4a13e9",
- "block_run": "1",
- "block_execute_tx": "0xdfc4b2add2348a0c2253b6b37568b8539bb706a024e45f3fdaa0c5549ad83a1a",
- "block_globex_balance_change": "0"
+  "payrun_v2": "0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541",
+  "payrun_v2_deploy_tx": "0x9f98fa4750cf78c4367b31e4cc886393a67820718802094c4b7eaaae44350ca5",
+  "observe_tx": "0xc8472b00a63946569954436dff3a0099b28a4e24a32b6e89e61430080b107a07",
+  "confirm_tx": "0x1353239ca2467412fc843090be685e608af91b1967975fcb1ebf7381b3813316",
+  "block_grant_tx": "0xe19ec4c148207ab5aa906e29f932e067121bcc731c8eca1b53f660dcbe532a35",
+  "block_stage_tx": "0xe6e5f2560477868cd22893ae8cbb78e6b8580f8e4b6ebf43658767fa0d4a13e9",
+  "block_run": "1",
+  "block_execute_tx": "0xdfc4b2add2348a0c2253b6b37568b8539bb706a024e45f3fdaa0c5549ad83a1a",
+  "block_globex_balance_change": "0",
+  "perm_policy": "0x4Ea16B1bb18005344FC77491F3809a47C74c01a4",
+  "perm_policy_deploy_tx": "0x5f85986413ccc502693ab3359887f362b716bd91d31d8e24fbb8295882198cc8",
+  "perm_grant_tx": "0x7dfd70df583ba970741c3e7a4b8a0316d2bcc8aba4d43e94aa5f0ae483cc7b08",
+  "perm_stage_tx": "0xfc7f9f35fac800fb49889bb2ac855bc67dc3d25ea34c2bbe472dac824075a368",
+  "perm_run": 2,
+  "perm_revoke_tx": "0x6a5b447aebeeee5743177da0d5f106f35ad8368307d81decead4183684d68cdb",
+  "perm_failed_attempts_aa95": [
+    "0x22b848dc567f100213133093db1b6d2757a6ef0f0bf84880a6abed8b6deae491",
+    "0x44f53d3d34fb43af84c16e6fdc3318fc2be6a4f2ac22b16a74c8e29544980152"
+  ]
 }

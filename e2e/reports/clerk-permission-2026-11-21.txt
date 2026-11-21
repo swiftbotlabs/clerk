@@ -1,0 +1,12 @@
+== checkRefusals BEFORE revoke 2026-11-21T14:20:06Z
+  REFUSED at validation: clerk asks the account to execute (pay) run 1
+  REFUSED at validation: clerk asks the account to transfer 1 tUSD8 to itself
+  REFUSED at validation: clerk stages over the per-run cap
+  REFUSED at validation: clerk signs a stage with 9M preVerificationGas at the max fee (gas drain)
+  ALLOWED (simulation, nothing sent): clerk stages 0.05 tUSD8 within the caps
+== checkRefusals AFTER revoke (REVOKED=1) 2026-11-21T14:20:43Z
+  REFUSED at validation: clerk asks the account to execute (pay) run 1
+  REFUSED at validation: clerk asks the account to transfer 1 tUSD8 to itself
+  REFUSED at validation: clerk stages over the per-run cap
+  REFUSED at validation: clerk signs a stage with 9M preVerificationGas at the max fee (gas drain)
+  REFUSED at validation: clerk stages 0.05 tUSD8 within the caps

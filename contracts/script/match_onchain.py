@@ -8,6 +8,7 @@ The metadata hash commits to the exact source text and compiler settings, so a f
 
   python3 script/match_onchain.py [address] [--rpc https://rpc-test.qday.info]      (PayRun)
   CONTRACT=PayRunV2 python3 script/match_onchain.py [address]                         (PayRunV2; default address from e2e/testnet_v2.json)
+  CONTRACT=ClerkStagePolicy python3 script/match_onchain.py 0x4Ea16B1bb18005344FC77491F3809a47C74c01a4   (the clerk permission policy)
 """
 import json, os, subprocess, sys, urllib.request
 from pathlib import Path
@@ -34,9 +35,10 @@ onchain = bytes.fromhex(call("eth_getCode", [addr, "latest"])[2:])
 if not onchain: raise SystemExit(f"FAIL: no code at {addr}")
 # immutables: token() = 0xfc0c546a, registry() = 0x7b103999; ids in immutableReferences follow the declaration order in the AST
 # the artifact has no AST; immutable ids follow declaration order (token is declared before registry in both contracts)
-names = dict(zip(sorted(int(k) for k in art["deployedBytecode"]["immutableReferences"]), ["token", "registry"]))
+imm = art["deployedBytecode"].get("immutableReferences", {})   # ClerkStagePolicy has none
+names = dict(zip(sorted(int(k) for k in imm), ["token", "registry"]))
 sel = {"token": "0xfc0c546a", "registry": "0x7b103999"}
-for ref, spots in art["deployedBytecode"]["immutableReferences"].items():
+for ref, spots in imm.items():
     name = names[int(ref)]
     val = bytes.fromhex(call("eth_call", [{"to": addr, "data": sel[name]}, "latest"])[2:])
     for s in spots: local[s["start"]:s["start"] + s["length"]] = val
