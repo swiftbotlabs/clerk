@@ -115,7 +115,10 @@ def check_line(source: str, line: dict, registry: Registry) -> Verdict:
     vendor = str(line.get("vendor", ""))
     checks["vendor_in_document"] = bool(vendor) and norm_text(vendor) in text
     try:
-        amt = Decimal(str(line.get("amount"))).quantize(Decimal("0.01"))
+        raw_amt = str(line.get("amount")).strip()
+        if re.fullmatch(r"\d{1,3}(,\d{3})+(\.\d{1,2})?", raw_amt):   # "2,428.99" as printed -> 2428.99
+            raw_amt = raw_amt.replace(",", "")
+        amt = Decimal(raw_amt).quantize(Decimal("0.01"))
         checks["amount_in_document"] = amt > 0 and amt in amounts_in(source)
     except (InvalidOperation, TypeError):
         checks["amount_in_document"] = False

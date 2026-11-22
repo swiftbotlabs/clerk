@@ -8,7 +8,9 @@ Pipeline per invoice (each step fails closed):
                 no tools, or the deterministic `rules` extractor used in tests) only PROPOSES; nothing it says is trusted.
   2. check    : check.py: every number/reference/date must appear in the source; the payee must be the vendor's ERC-8004
                 registered wallet (Confirmation of Payee MATCH); otherwise HOLD or BLOCK.
-  3. dedupe   : invoiceHash = keccak256(file bytes). Skipped if the chain says it is already paid or already in an open run.
+  3. dedupe   : invoiceHash = keccak256("clerk-invoice:<vendor agentId>:<invoice number, letters and digits only>"), the pay-once
+                key PayRunV2 enforces. A re-sent copy (same file, a reminder, the number re-typed as "inv 1001") gets the same key, so
+                it is skipped if the chain says it is already paid or in an open run, and a second copy in the same batch is skipped.
   4. pack     : PAYABLE lines are packed into runs that fit the session key's headroom (per-run cap, what is left today).
   5. simulate : each run is simulated (eth_call from the session key) before it is sent; a revert is reported, not retried.
   6. send     : sent with retries; after a timeout we re-read stagedInRun for the run's first invoice before resending, so a
@@ -143,8 +145,15 @@ def extract_rules(text: str) -> dict:
         "amount": m.group(1) if m else "",
         "currency": "tUSD8",
         "reference": grab("invoice no", "invoice number", "invoice", "reference") or "",
-        "due_date": grab("due date", "due") or "",
+        "due_date": _iso_date(grab("due date", "due") or ""),
     }
+
+
+def _iso_date(value: str) -> str:
+    """'5 Dec 2026' / 'Dec 5, 2026' / '2026-12-05' -> '2026-12-05' (one unambiguous date, else the raw value: check.py fails it)."""
+    from check import dates_in
+    found = dates_in(value)
+    return next(iter(found)).isoformat() if len(found) == 1 else value
 
 
 EXTRACT_PROMPT = """You read one invoice and fill in a payment line. Output ONLY a JSON object with these keys:
@@ -190,7 +199,7 @@ def extract_json(path: Path) -> dict:
 @dataclass
 class Planned:
     file: str
-    invoice_hash: str
+    invoice_hash: str   # the on-chain pay-once key (see invoice_key); keccak256 of the file until the line is PAYABLE
     proposed: dict
     decision: str
     cop: str
@@ -228,8 +237,15 @@ def ref32(ref: str) -> str:
     return "0x" + b.hex().ljust(64, "0")
 
 
+def invoice_key(agent_id: int, reference: str) -> str:
+    """Pay-once key for a vendor's invoice: the vendor identity plus its invoice number with case, spaces and punctuation dropped,
+    so 'INV-1001', 'inv 1001' and 'Inv1001' from the same vendor are one invoice. The file bytes are not part of it."""
+    return keccak(f"clerk-invoice:{agent_id}:{re.sub(r'[^A-Z0-9]', '', reference.upper())}".encode())
+
+
 def plan(chain: Chain, payrun: str | None, invoices: list[Path], directory: Directory, extractor: str) -> list[Planned]:
     out = []
+    seen: dict[str, str] = {}   # pay-once key -> first file in this batch
     for p in sorted(invoices):
         raw = p.read_bytes()
         text = raw.decode("utf-8", errors="replace")
@@ -241,6 +257,12 @@ def plan(chain: Chain, payrun: str | None, invoices: list[Path], directory: Dire
                        evidence=evidence(text, line))
         if v.decision == "PAYABLE":
             item.units = to_units(line["amount"])
+            item.invoice_hash = h = invoice_key(item.agent_id, line["reference"])
+            if h in seen:
+                item.skip = f"duplicate of {seen[h]} (same vendor and invoice number)"
+                out.append(item)
+                continue
+            seen[h] = p.name
             if payrun:
                 if int(chain.call(payrun, "paidInRun(bytes32)(uint256)", h).split()[0]) != 0:
                     item.skip = "already paid"

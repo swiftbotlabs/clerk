@@ -92,6 +92,11 @@ class LookalikeNames(unittest.TestCase):
                 "reference": "INV-9", "due_date": "2026-12-03"}
         self.assertEqual(check_line(src, line, reg).decision, "PAYABLE")
 
+    def test_amount_with_thousands_separator_as_printed(self):
+        v = check_line(INVOICE, dict(GOOD, amount="1,250.00"), REG)
+        self.assertEqual(v.decision, "PAYABLE", v.reasons)
+        self.assertEqual(check_line(INVOICE, dict(GOOD, amount="1,350.00"), REG).decision, "HOLD")
+
 
 if __name__ == "__main__":
     unittest.main()

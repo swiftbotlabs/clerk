@@ -6,6 +6,8 @@
 PayRun [`0x2EE2…Da98`](https://explorer-test.qday.info/address/0x2EE29a167CDDb964aAB9C899ea9Ae89847e3Da98) ·
 PayRunV2 [`0x89d1…F541`](https://explorer-test.qday.info/address/0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541) · every transaction in [Aevum testnet](#aevum-testnet).
 
+**Architecture in one page:** [ARCHITECTURE.md](ARCHITECTURE.md) (the canonical path: PayRunV2 + the clerk's key as a Kernel permission). **Adversarial eval:** [160 attack and control invoices, 0 wrong payments](#adversarial-invoice-eval).
+
 Invoice-redirection fraud ("we have new bank details, pay this account instead") is the most common way businesses lose money on payables, and AI agents now read the invoices. Clerk lets an AI do the reading and the paperwork while the rules, not the model, decide who gets paid:
 
 - The clerk's key can only **stage** a pay run: under a per-run cap and a per-day cap, before it expires, and only to the wallet each vendor **registered** for its ERC-8004 identity (Confirmation of Payee, checked on chain).
@@ -34,8 +36,9 @@ flowchart LR
 | `contracts/test/PayRunV2*.t.sol` | 38 tests for PayRunV2: the 19 above re-run against it, plus 19 for the hold (4 fuzzed, including A to B to A) |
 | `contracts/script/hold_controls.sh` | Revert control: switches each hold rule off in turn, expects tests to fail, restores the source byte for byte, expects all green |
 | `contracts/script/match_onchain.py` | Shows the deployed PayRun is this source: compiles it, reads the runtime bytecode from the chain, compares byte for byte (metadata hash included) |
-| `agent/check.py` | Fail-closed checks between an invoice and the line a model proposed (12 tests) |
-| `agent/stage.py` | `plan` / `stage`: extract, check, dedupe by `keccak256(file)` on chain, pack within the key's headroom, simulate, send with retries and a landed-check (idempotent) |
+| `agent/check.py` | Fail-closed checks between an invoice and the line a model proposed (13 tests) |
+| `agent/stage.py` | `plan` / `stage`: extract, check, pay-once key per vendor invoice number (checked on chain and inside the batch), pack within the key's headroom, simulate, send with retries and a landed-check (idempotent); 4 tests |
+| `e2e/adversarial/` | The adversarial-invoice eval: corpus generator (`gen.py`), local-chain runner (`run_eval.py`), table (`report.py`), `run.sh` |
 | `agent/reconcile.py` | `Paid` events in 1,000-block chunks, matched to `ledger.csv`; on PayRunV2 also `HELD` rows and the payee audit trail |
 | `web/index.html` | Approval page: each staged line with the invoice line behind every number, held and stopped invoices, approve or reject from the owner's wallet |
 | `e2e/run_fork.sh` | The whole flow on a local fork of Aevum testnet (real registry, real tUSD8) |
@@ -61,11 +64,41 @@ implementation (`0xBAC849bB641841b44E965fB01A4Bf5F074f84b4D`), Kernel's ECDSA va
 | Hallucinated amounts or references | Every value must appear in the source document | `check.py` |
 | Look-alike vendor ("Acme Suppiles Ltd") | Held for a human | `check.py` |
 | Vendor wallet hijacked after staging | `execute` re-checks every payee and reverts the run | `PayRun.execute` |
-| Paying the same invoice twice | `paidInRun` / `stagedInRun` per invoice hash; stage.py checks before sending | `PayRun`, `stage.py` |
+| Paying the same invoice twice | Pay-once key = vendor agentId + invoice number (case, spaces, punctuation ignored), so a reminder copy or a re-typed number is the same invoice; `paidInRun` / `stagedInRun` enforce it on chain; stage.py also skips copies inside a batch | `stage.py`, `PayRun` |
 | Partial payment runs | All-or-nothing execution | `PayRun.execute` |
 | Stale approvals | A staged run expires after 7 days | `RUN_TTL` |
 | Audit | `Paid(runId, line, invoiceHash, ref, payeeAgentId, payee, amount)` + reconciliation | `reconcile.py` |
 | Vendor's wallet swapped in the registry ("new bank details") | First payment to a new or changed wallet is held until the window passes or the owner confirms it | `PayRunV2` (below) |
+
+## Adversarial-invoice eval
+`e2e/adversarial/run.sh` builds 160 invoices across 8 families: 30 genuine controls, plus redirects, prompt injections, look-alike
+vendors, model-edited values, document-edited amounts, over-cap invoices and re-sent copies. It then runs the real pipeline against
+PayRunV2 on a local chain.
+- The owner **executes every staged run without reading it**, so the checks alone stand between the attacker and the money.
+- It runs twice: once with the deterministic extractor, and once with a **fully compromised extractor** that proposes the attacker's
+  best line for every attack file.
+- Results are read from the chain afterwards. The full table and the corpus truth file are in
+  [e2e/reports/adversarial-eval-2026-11-22.md](e2e/reports/adversarial-eval-2026-11-22.md).
+
+| Outcome, read from the chain | rules extractor | hostile extractor |
+|---|---|---|
+| Payments to a wallet that isn't the vendor's registered wallet | 0 | 0 |
+| Payments for a fake invoice (75 redirect, injection and look-alike invoices) | 0 | 0 |
+| Model-invented or model-edited amounts paid | 0 | 0 |
+| Same vendor invoice paid twice (15 re-sent copies) | 0 | 0 |
+| Payments above the per-run cap | 0 | 0 |
+| tUSD8 received by the attacker's 5 wallets | 0 | 0 |
+| Genuine invoices paid once, right amount | 55/55 | 30/55 (the 25 the model edited are held for a human) |
+| Vendor identity taken over (wallet swapped after staging; new invoice to the new wallet; swapped back A to B to A) | staged, nothing paid | staged, nothing paid |
+
+**What it found, and what is fixed.**
+- The first run paid 10 re-sent invoices twice: reminder copies and re-typed numbers had different file bytes, and the pay-once key was the
+  file hash. The key is now the vendor's identity plus the invoice number, and `agent/tests/test_stage.py` fails without the fix.
+- Genuine invoices that print "2,428.99" were held, because `check.py` didn't parse the thousands separator. Fixed, with a test.
+
+**The limit it shows.** An attacker who edits the *amount* on a real vendor's invoice, without touching the payee, gets that amount staged
+to the real vendor's wallet, within the caps (10 of 10). The approval page shows the invoice line behind each number, and the money
+can only reach the vendor.
 
 ## The clerk's key inside the smart account (Kernel permission)
 The clerk's key can also live **inside** the owner's Kernel v3.1 account, as a Kernel *permission*. That is a signer plus a policy,
@@ -146,7 +179,8 @@ cd contracts && forge test --no-match-path 'test/fork/*'    # 57 unit + property
 script/hold_controls.sh                                      # revert control for the payee-change hold
 python3 script/match_onchain.py                              # deployed bytecode == this source
 forge test --match-path 'test/fork/*' --fork-url https://rpc-test.qday.info   # against the real registry
-cd ../agent/tests && python3 test_check.py && python3 test_reconcile.py   # check.py, reconcile.py
+cd ../agent/tests && python3 test_check.py && python3 test_stage.py && python3 test_reconcile.py   # check.py, stage.py, reconcile.py
+../../e2e/adversarial/run.sh                                 # the adversarial-invoice eval (local anvil chain)
 cd ../../e2e && ./run_fork.sh                                 # full flow on a local fork (chain 440050)
 KERNEL=1 ./run_fork.sh                                        # same, the owner + treasury as a Kernel v3.1 smart account (UserOperations)
 EXTRACTOR=llm ./run_fork.sh                                   # same, with the LLM extractor (needs CLERK_LLM_URL)
@@ -181,17 +215,26 @@ Live refusals on testnet (eth_call against the deployed PayRun, 20 Nov): the cle
 
 Approval page: https://clerk.swiftbotlab.workers.dev/ (the latest testnet run; connect a wallet that owns PayRun to approve). It only sends approvals to the PayRun above, only opens reports from its own site, and loads viem from a vendored copy (`docs/vendor/viem-2.21.0.js`, sha256 `9186bb2d03bf7806da094a3686ef5606e2fb74acbdd04d01806e67aed8706bfb`, from esm.sh viem@2.21.0 es2022 bundle).
 
-**Verified source.** The testnet explorer's verifier lists no compiler versions yet, so `contracts/script/match_onchain.py` does the check:
+**Verified source.** For most of the build the testnet explorer's verifier listed no compiler versions, so `contracts/script/match_onchain.py` does the check:
 on 20 Nov it compiled `src/PayRun.sol` (solc 0.8.34, Shanghai, 200 optimizer runs), filled the two immutables with the values the deployed
 contract reports (tUSD8, the ERC-8004 registry) and found the 6,462-byte runtime code on chain **identical, metadata hash included**. `CONTRACT=PayRunV2 python3 script/match_onchain.py` does the same for PayRunV2 (11,389 bytes, identical, checked 20 Nov). The
-metadata hash commits to the exact source text and settings. We will also verify on the explorer once its verifier works.
+metadata hash commits to the exact source text and settings. The verifier lists solc 0.8.34 since about 22 Nov; `contracts/script/verify_explorer.sh` submits PayRun, PayRunV2 and ClerkStagePolicy (the deploy transactions' creation code is identical to `forge inspect … bytecode`, checked 22 Nov).
 
 Every hash is also in `e2e/testnet.json`; `e2e/run_testnet.sh` reproduces the run and skips steps already done.
 
-## Notes from building on Aevum
-- The explorer's contract verifier has no compiler list yet; `match_onchain.py` above is our stand-in.
-- Aevum is a Shanghai EVM: compile with `evm_version = "shanghai"` (no MCOPY or transient storage).
-- `eth_getLogs` is capped at 1,000 blocks; `agent/reconcile.py` pages every scan.
+## Feedback for the Aevum team (from building this)
+- **Explorer verification.** Until about 22 Nov the explorer's verifier listed no Solidity compilers, so `match_onchain.py` was our
+  stand-in. It lists solc 0.8.34 now; `contracts/script/verify_explorer.sh` verifies all three contracts, with the constructor
+  arguments read back from the deploy transactions. A short "verify with Foundry" snippet (`--verifier blockscout`, the API URL) in the starter kit would save builders time.
+- **Shanghai EVM.** Compile with `evm_version = "shanghai"` (no MCOPY or transient storage). Saying this in the kit's first page would save a failed deploy.
+- **`eth_getLogs` is capped at 1,000 blocks.** `agent/reconcile.py` pages every scan; an indexer endpoint or a higher cap for
+  explorers and accounting tools would help.
+- **ERC-4337 gas.** Against EntryPoint v0.7 on Aevum, Foundry's estimate for an outer `handleOps` call was too low and the first
+  permission UserOperations failed with AA95 (both are on the explorer). An explicit gas limit fixed it. The kit could recommend a
+  margin, or QDay's bundler could document `eth_estimateUserOperationGas` for Kernel permission (enable-mode) operations.
+- **What worked well.** Kernel v3.1, its ECDSA validator and ZeroDev's ECDSASigner are already deployed at their canonical addresses,
+  so a scoped in-account permission needed only our policy contract. QDay's bundler accepted our owner UserOperations as-is. And
+  `getAgentWallet` on the ERC-8004 registry is exactly the primitive Confirmation of Payee needs.
 
 ## Who pays for this, and how it grows
 A finance team pays per protected pay run (a few cents in stablecoin) or a flat monthly fee; vendors register their payout wallet once on
