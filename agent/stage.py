@@ -33,7 +33,7 @@ from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from check import Registry, Verdict, check_line  # noqa: E402
+from check import AmountPolicy, Registry, Verdict, check_line, po_key  # noqa: E402
 
 RPC = os.environ.get("AEVUM_RPC", "https://rpc-test.qday.info")
 REGISTRY = os.environ.get("AEVUM_REGISTRY", "0xF45E7f39Caba1d2055f613970575a7e7069636Be")
@@ -243,14 +243,47 @@ def invoice_key(agent_id: int, reference: str) -> str:
     return keccak(f"clerk-invoice:{agent_id}:{re.sub(r'[^A-Z0-9]', '', reference.upper())}".encode())
 
 
-def plan(chain: Chain, payrun: str | None, invoices: list[Path], directory: Directory, extractor: str) -> list[Planned]:
+def load_policy(directory: Directory, pos_csv: str | None, bands_csv: str | None) -> AmountPolicy | None:
+    """The payer's own expectations, keyed by vendor agentId in the files: pos.csv `agent_id,po,amount`, bands.csv
+    `agent_id,max_amount`. Rows for agentIds outside the vendor list are ignored."""
+    import csv
+    if not (pos_csv or bands_csv):
+        return None
+    names = {aid: name for name, aid in directory.ids.items()}
+    pol = AmountPolicy()
+    for row in csv.DictReader(open(pos_csv)) if pos_csv else []:
+        name = names.get(int(row["agent_id"]))
+        if name:
+            pol.purchase_orders.setdefault(name, {})[po_key(row["po"])] = Decimal(row["amount"]).quantize(Decimal("0.01"))
+    for row in csv.DictReader(open(bands_csv)) if bands_csv else []:
+        name = names.get(int(row["agent_id"]))
+        if name:
+            pol.bands[name] = Decimal(row["max_amount"]).quantize(Decimal("0.01"))
+    return pol
+
+
+def read_invoice(p: Path) -> tuple[bytes, str]:
+    """(file bytes, text). A PDF goes through poppler's pdftotext (-layout, 30 s limit). A PDF with no text layer (a scan) yields
+    no text, so every value check fails closed and the line is held or blocked; OCR is out of scope."""
+    raw = p.read_bytes()
+    if p.suffix.lower() != ".pdf":
+        return raw, raw.decode("utf-8", errors="replace")
+    try:
+        out = subprocess.run(["pdftotext", "-layout", "-enc", "UTF-8", "-l", "20", str(p), "-"], capture_output=True, timeout=30)
+        text = out.stdout.decode("utf-8", errors="replace") if out.returncode == 0 else ""
+    except (OSError, subprocess.TimeoutExpired):
+        text = ""
+    return raw, text
+
+
+def plan(chain: Chain, payrun: str | None, invoices: list[Path], directory: Directory, extractor: str,
+         policy: AmountPolicy | None = None) -> list[Planned]:
     out = []
     seen: dict[str, str] = {}   # pay-once key -> first file in this batch
     for p in sorted(invoices):
-        raw = p.read_bytes()
-        text = raw.decode("utf-8", errors="replace")
+        raw, text = read_invoice(p)
         line = extract_rules(text) if extractor == "rules" else extract_llm(text) if extractor == "llm" else extract_json(p)
-        v: Verdict = check_line(text, line, directory.registry)
+        v: Verdict = check_line(text, line, directory.registry, policy)
         h = keccak(raw)
         item = Planned(p.name, h, line, v.decision, v.cop, v.registered_name,
                        directory.ids.get(v.registered_name) if v.registered_name else None, v.reasons, v.warnings,
@@ -333,12 +366,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--payrun", default=os.environ.get("PAYRUN"))
     ap.add_argument("--account", help="cast keystore account of the clerk's session key (stage only)")
     ap.add_argument("--extractor", choices=["rules", "llm", "json"], default="rules")
+    ap.add_argument("--pos", help="purchase orders, CSV agent_id,po,amount: a vendor's invoice must cite one and match its amount")
+    ap.add_argument("--bands", help="CSV agent_id,max_amount: hold a vendor's invoice above its usual range")
     ap.add_argument("--out", default="run_report.json")
     a = ap.parse_args(argv)
     chain = Chain()
     directory = load_directory(chain, [int(x) for x in a.vendors.split(",") if x.strip()])
-    files = [p for p in Path(a.invoices).iterdir() if p.is_file() and p.suffix.lower() in (".txt", ".eml", ".csv", ".md")]
-    items = plan(chain, a.payrun, files, directory, a.extractor)
+    files = [p for p in Path(a.invoices).iterdir() if p.is_file() and p.suffix.lower() in (".txt", ".eml", ".csv", ".md", ".pdf")]
+    items = plan(chain, a.payrun, files, directory, a.extractor, load_policy(directory, a.pos, a.bands))
     report: dict = {"payrun": a.payrun, "items": [asdict(i) for i in items]}
     if a.cmd == "stage":
         if not (a.payrun and a.account):

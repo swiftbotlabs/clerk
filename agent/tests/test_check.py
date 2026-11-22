@@ -1,6 +1,6 @@
 import os, sys, unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from check import Registry, check_line, amounts_in, dates_in
+from check import AmountPolicy, Registry, check_line, amounts_in, dates_in
 from decimal import Decimal
 from datetime import date
 
@@ -96,6 +96,32 @@ class LookalikeNames(unittest.TestCase):
         v = check_line(INVOICE, dict(GOOD, amount="1,250.00"), REG)
         self.assertEqual(v.decision, "PAYABLE", v.reasons)
         self.assertEqual(check_line(INVOICE, dict(GOOD, amount="1,350.00"), REG).decision, "HOLD")
+
+    # Amount expectations set by the payer: catch an amount edited in the document with the payee untouched.
+    PO_INVOICE = INVOICE + "\nPO number: PO-7781"
+
+    def test_po_match_pays_the_po_amount(self):
+        pol = AmountPolicy(purchase_orders={"Acme Design Ltd": {"PO7781": Decimal("1250.00")}})
+        self.assertEqual(check_line(self.PO_INVOICE, GOOD, REG, pol).decision, "PAYABLE")
+
+    def test_amount_edited_away_from_the_po_is_held(self):
+        pol = AmountPolicy(purchase_orders={"Acme Design Ltd": {"PO7781": Decimal("1050.00")}})
+        v = check_line(self.PO_INVOICE, GOOD, REG, pol)
+        self.assertEqual(v.decision, "HOLD")
+        self.assertIn("differs from the purchase order", " ".join(v.reasons))
+
+    def test_invoice_without_a_known_po_is_held(self):
+        pol = AmountPolicy(purchase_orders={"Acme Design Ltd": {"PO1111": Decimal("1250.00")}})
+        self.assertEqual(check_line(self.PO_INVOICE, GOOD, REG, pol).decision, "HOLD")
+        self.assertEqual(check_line(INVOICE, GOOD, REG, pol).decision, "HOLD")
+
+    def test_band_holds_outliers_only(self):
+        self.assertEqual(check_line(INVOICE, GOOD, REG, AmountPolicy(bands={"Acme Design Ltd": Decimal("1000")})).decision, "HOLD")
+        self.assertEqual(check_line(INVOICE, GOOD, REG, AmountPolicy(bands={"Acme Design Ltd": Decimal("2000")})).decision, "PAYABLE")
+
+    def test_other_vendors_unaffected(self):
+        pol = AmountPolicy(purchase_orders={"Northwind Hosting": {"PO1": Decimal("5")}}, bands={"Northwind Hosting": Decimal("1")})
+        self.assertEqual(check_line(INVOICE, GOOD, REG, pol).decision, "PAYABLE")
 
 
 if __name__ == "__main__":

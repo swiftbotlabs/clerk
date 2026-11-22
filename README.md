@@ -2,7 +2,7 @@
 
 **Accounts payable with an AI clerk that can't be talked into paying the wrong person.** Built on Aevum testnet (chain 44005) with tUSD8 and the ERC-8004 identity registry.
 
-**Try it:** approval page https://clerk.swiftbotlab.workers.dev/ · demo video (3:01) https://youtu.be/WpnxGX7nYnM ·
+**Try it:** approval page https://clerk.swiftbotlab.workers.dev/ (server-rendered: the testnet run and record show with no wallet and no JavaScript) · demo video (3:01) https://youtu.be/WpnxGX7nYnM ·
 PayRun [`0x2EE2…Da98`](https://explorer-test.qday.info/address/0x2EE29a167CDDb964aAB9C899ea9Ae89847e3Da98) ·
 PayRunV2 [`0x89d1…F541`](https://explorer-test.qday.info/address/0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541) · every transaction in [Aevum testnet](#aevum-testnet).
 
@@ -36,8 +36,10 @@ flowchart LR
 | `contracts/test/PayRunV2*.t.sol` | 38 tests for PayRunV2: the 19 above re-run against it, plus 19 for the hold (4 fuzzed, including A to B to A) |
 | `contracts/script/hold_controls.sh` | Revert control: switches each hold rule off in turn, expects tests to fail, restores the source byte for byte, expects all green |
 | `contracts/script/match_onchain.py` | Shows the deployed PayRun is this source: compiles it, reads the runtime bytecode from the chain, compares byte for byte (metadata hash included) |
-| `agent/check.py` | Fail-closed checks between an invoice and the line a model proposed (13 tests) |
-| `agent/stage.py` | `plan` / `stage`: extract, check, pay-once key per vendor invoice number (checked on chain and inside the batch), pack within the key's headroom, simulate, send with retries and a landed-check (idempotent); 4 tests |
+| `agent/check.py` | Fail-closed checks between an invoice and the line a model proposed, plus the payer's purchase-order match and per-vendor amount bands (18 tests) |
+| `agent/stage.py` | `plan` / `stage`: extract, check, pay-once key per vendor invoice number (checked on chain and inside the batch), pack within the key's headroom, simulate, send with retries and a landed-check (idempotent); text, email, CSV and PDF invoices (pdftotext; a scan with no text layer fails closed); 7 tests |
+| `e2e/prerender.py`, `e2e/build_pages.sh` | Builds the hosted page and renders the testnet run into it at build time (read-only RPC), so it shows without a wallet or JavaScript |
+| `e2e/demo_day_check.sh` | Read-only pre-flight for a live testnet demo: RPC, treasury, gas, sessions, page, bundler, video |
 | `e2e/adversarial/` | The adversarial-invoice eval: corpus generator (`gen.py`), local-chain runner (`run_eval.py`), table (`report.py`), `run.sh` |
 | `agent/reconcile.py` | `Paid` events in 1,000-block chunks, matched to `ledger.csv`; on PayRunV2 also `HELD` rows and the payee audit trail |
 | `web/index.html` | Approval page: each staged line with the invoice line behind every number, held and stopped invoices, approve or reject from the owner's wallet |
@@ -88,7 +90,8 @@ PayRunV2 on a local chain.
 | Same vendor invoice paid twice (15 re-sent copies) | 0 | 0 |
 | Payments above the per-run cap | 0 | 0 |
 | tUSD8 received by the attacker's 5 wallets | 0 | 0 |
-| Genuine invoices paid once, right amount | 55/55 | 30/55 (the 25 the model edited are held for a human) |
+| Amounts edited inside the document (payee untouched), with the payer's purchase-order book | 0/10 paid | 0/10 paid |
+| Genuine invoices paid once, right amount (30 controls + the 25 genuine invoices of the "model edits a value" family) | 55/55 | 30/55 (the 25 the model edited are held for a human) |
 | Vendor identity taken over (wallet swapped after staging; new invoice to the new wallet; swapped back A to B to A) | staged, nothing paid | staged, nothing paid |
 
 **What it found, and what is fixed.**
@@ -96,9 +99,11 @@ PayRunV2 on a local chain.
   file hash. The key is now the vendor's identity plus the invoice number, and `agent/tests/test_stage.py` fails without the fix.
 - Genuine invoices that print "2,428.99" were held, because `check.py` didn't parse the thousands separator. Fixed, with a test.
 
-**The limit it shows.** An attacker who edits the *amount* on a real vendor's invoice, without touching the payee, gets that amount staged
-to the real vendor's wallet, within the caps (10 of 10). The approval page shows the invoice line behind each number, and the money
-can only reach the vendor.
+**The gap it showed, now closed.** An attacker who edits only the *amount* on a real vendor's invoice passes every document check. Without
+the payer's own expectations, the first runs paid all 10 such invoices to the real vendor, within the caps. Now the payer can give
+`stage.py` its purchase-order book (`--pos pos.csv`: agentId, PO number, amount). A vendor's invoice must then cite one of its POs
+and match that amount (10/10 held, every genuine invoice still paid). For vendors without POs, `--bands` (agentId, highest usual
+amount) holds outliers. Both rules are in `check.py` (`AmountPolicy`).
 
 ## The clerk's key inside the smart account (Kernel permission)
 The clerk's key can also live **inside** the owner's Kernel v3.1 account, as a Kernel *permission*. That is a signer plus a policy,
@@ -244,7 +249,7 @@ call `stage()` from their "pay bills" flow, and agent frameworks use the staging
 ## Limits and next steps
 - The owner runs as a Kernel v3.1 smart account in the fork tests and on testnet (above). The clerk's key can sit in PayRun (`grantSession`) or inside the account as a Kernel permission (above). The permission's per-day cap is PayRun's; validation can't read the clock, so the policy enforces the per-run cap and the expiry only.
 - The daily cap counts staged amounts (rejected runs still count), which is deliberately conservative.
-- PDF and image invoices need a text layer first (pdftotext / OCR) before `check.py` can verify numbers.
+- PDF invoices are read with pdftotext; scanned PDFs and images need OCR first (out of scope; they fail closed today).
 
 ## Credits
 forge-std (MIT/Apache-2.0). Local model for the demo extractor: Qwen3-1.7B (Apache-2.0) via llama.cpp. Network facts from the Aevum Starter Kit docs (MIT, PQA Labs). MIT licensed.

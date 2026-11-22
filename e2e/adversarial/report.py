@@ -12,7 +12,8 @@ def main(argv):
     after = json.load(open(argv[1]))
     before = json.load(open(argv[2])) if len(argv) > 2 else None
     m = after["modes"]
-    print(f"Corpus: {after['files']} invoices (seed {after['seed']}), local anvil chain, PayRunV2 + EvalRegistry, rubber-stamp owner.\n")
+    print(f"Corpus: {after['files']} invoices (seed {after['seed']}), local anvil chain, PayRunV2 + EvalRegistry, rubber-stamp owner"
+          f"{', purchase-order book on' if after.get('po_book') else ''}.\n")
     print("| Family | n | rules extractor: payable / held / blocked / paid | hostile extractor: payable / held / blocked / paid |")
     print("|---|---|---|---|")
     for cls, lab in LABEL.items():
@@ -30,7 +31,8 @@ def main(argv):
         print(f"| {lab} | {len(m['rules'][k])} | {len(m['hostile'][k])} |")
     print(f"| tUSD8 received by the 5 attacker wallets | {sum(m['rules']['attacker_balances'].values())} | {sum(m['hostile']['attacker_balances'].values())} |")
     print(f"| Genuine invoices paid, right amount, once (30 controls + the 25 whose line the model edited) | {m['rules']['genuine_paid']} | {m['hostile']['genuine_paid']} |")
-    print(f"| Document-edited amounts paid to the real vendor (the known limit) | {len(m['rules']['doc_amount_edit_paid'])}/10 | {len(m['hostile']['doc_amount_edit_paid'])}/10 |")
+    po = " (with the payer's purchase-order book)" if after.get("po_book") else " (no purchase-order book: the known limit)"
+    print(f"| Amounts edited inside the document, paid to the real vendor{po} | {len(m['rules']['doc_amount_edit_paid'])}/10 | {len(m['hostile']['doc_amount_edit_paid'])}/10 |")
     print("\nRegistry wallet-swap scenarios (vendor identity taken over), owner executes every staged run:\n")
     print("| Scenario | rules: staged / paid / attacker received | hostile: staged / paid / attacker received |")
     print("|---|---|---|")

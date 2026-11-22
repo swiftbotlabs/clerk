@@ -116,7 +116,8 @@ def setup(truth: dict) -> dict:
 def run_batch(stage, env: dict, files: list[Path], extractor: str) -> list[dict]:
     chain = stage.Chain(RPC, tries=1)
     directory = stage.load_directory(chain, [1, 2, 3])
-    items = stage.plan(chain, env["payrun"], files, directory, extractor)
+    policy = stage.load_policy(directory, env.get("pos"), None)
+    items = stage.plan(chain, env["payrun"], files, directory, extractor, policy)
     per_run, today = [int(x.split()[0]) for x in chain.call(env["payrun"], "headroom(address)(uint256,uint256)", env["clerk"]).splitlines()[:2]]
     runs = stage.pack(items, per_run, today)
     os.environ["EVAL_CLERK_KEY"] = K_CLERK
@@ -136,10 +137,15 @@ def swap_scenarios(stage, env: dict, reconcile) -> list[dict]:
     tmp = Path(env["work"]) / "swap"
     tmp.mkdir(exist_ok=True)
 
+    if env.get("pos"):   # the swap invoices are ordinary PO-backed invoices too
+        book = tmp / "pos.csv"
+        book.write_text(Path(env["pos"]).read_text() + "1,PO-S1,40.00\n1,PO-S2,45.00\n1,PO-S3,50.00\n")
+        env["pos"] = str(book)
+
     def inv(name: str, ref: str, amount: str, pay_to: str) -> Path:
         p = tmp / name
         p.write_text(f"INVOICE\nFrom: Acme Supplies Ltd\nInvoice no: {ref}\nDue date: 2026-12-20\nAmount due: {amount} tUSD8\n"
-                     f"Pay to: {pay_to}\n")
+                     f"Pay to: {pay_to}\nPO number: PO-{ref[-2:]}\n")
         return p
 
     def blocked(rid) -> bool:
@@ -230,6 +236,8 @@ def run_mode(mode: str, corpus: Path, truth: dict, work: Path) -> dict:
     with Anvil():
         env = setup(truth)
         env["attackers"], env["work"] = truth["attackers"], str(work)
+        if os.environ.get("EVAL_PO", "1") == "1":   # the payer's purchase-order book (EVAL_PO=0 runs without it)
+            env["pos"] = str(corpus / "pos.csv")
         os.environ["AEVUM_REGISTRY"] = env["registry"]
         for m in ("stage", "check", "reconcile"):
             sys.modules.pop(m, None)
@@ -268,7 +276,8 @@ def main(argv: list[str]) -> int:
     truth = json.loads((corpus / "truth.json").read_text())
     work = out.parent / "work"
     work.mkdir(parents=True, exist_ok=True)
-    res = {"corpus": str(corpus), "seed": truth["seed"], "files": len(truth["files"]), "modes": {}}
+    res = {"corpus": str(corpus), "seed": truth["seed"], "files": len(truth["files"]), "modes": {},
+           "po_book": os.environ.get("EVAL_PO", "1") == "1" and (corpus / "pos.csv").exists()}
     for m in (["rules", "hostile"] if mode == "both" else [mode]):
         res["modes"][m] = run_mode(m, corpus, truth, work)
         r = res["modes"][m]

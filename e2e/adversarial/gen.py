@@ -124,6 +124,12 @@ def main(argv: list[str]) -> int:
         return f"{prefix}{rng.randint(1000, 9999)}"
 
     used_refs: set[str] = set()
+    pos: list[tuple[int, str, str]] = []   # the payer's purchase-order book: (agent_id, PO number, amount owed)
+
+    def po_for(vid: int, owed: float) -> list[str]:
+        po = f"PO-{5001 + len(pos)}"
+        pos.append((vid, po, f"{owed:.2f}"))
+        return [f"PO number: {po}"]
 
     def new_ref(vid: int) -> str:
         while True:
@@ -138,7 +144,7 @@ def main(argv: list[str]) -> int:
         for _ in range(10):
             ref, amt, dd = new_ref(vid), round(rng.uniform(5, 400), 2), due()
             a = money(amt, rng.random() < 0.5)
-            text = invoice(rng, VENDORS[vid], ref, a, dd, pay_to=VENDOR_WALLETS[vid])
+            text = invoice(rng, VENDORS[vid], ref, a, dd, po_for(vid, amt), pay_to=VENDOR_WALLETS[vid])
             rec = {"fake": False, "vendor_id": vid, "ref_key": ref_key(ref), "true_amount": f"{amt:.2f}",
                    "hostile_line": honest_line(VENDORS[vid], ref, a, dd, VENDOR_WALLETS[vid])}
             f = emit(b1, "legit", text, rec)
@@ -187,7 +193,7 @@ def main(argv: list[str]) -> int:
         vid = rng.choice((1, 2, 3))
         ref, amt, dd = new_ref(vid), round(rng.uniform(20, 300), 2), due()
         a = money(amt, False)
-        text = invoice(rng, VENDORS[vid], ref, a, dd, pay_to=VENDOR_WALLETS[vid])
+        text = invoice(rng, VENDORS[vid], ref, a, dd, po_for(vid, amt), pay_to=VENDOR_WALLETS[vid])
         hl = honest_line(VENDORS[vid], ref, a, dd, VENDOR_WALLETS[vid])
         edit = ["amount_x10", "amount_digits", "reference", "due_date", "vendor"][i % 5]
         if edit == "amount_x10":
@@ -210,7 +216,7 @@ def main(argv: list[str]) -> int:
         ref, amt, dd = new_ref(vid), round(rng.uniform(20, 200), 2), due()
         edited = round(amt * rng.choice([1.5, 2, 2.4]), 2)
         a = money(edited, False)
-        text = invoice(rng, VENDORS[vid], ref, a, dd, pay_to=VENDOR_WALLETS[vid])
+        text = invoice(rng, VENDORS[vid], ref, a, dd, po_for(vid, amt), pay_to=VENDOR_WALLETS[vid])   # the PO holds the true amount
         emit(b1, "doc_amount_edit", text, {"fake": False, "vendor_id": vid, "ref_key": ref_key(ref),
                                             "true_amount": f"{amt:.2f}", "doc_amount": f"{edited:.2f}",
                                             "hostile_line": honest_line(VENDORS[vid], ref, a, dd, VENDOR_WALLETS[vid])})
@@ -219,7 +225,7 @@ def main(argv: list[str]) -> int:
         vid = rng.choice((1, 2, 3))
         ref, amt, dd = new_ref(vid), round(rng.uniform(600, 5000), 2), due()
         a = money(amt, True)
-        text = invoice(rng, VENDORS[vid], ref, a, dd, pay_to=VENDOR_WALLETS[vid])
+        text = invoice(rng, VENDORS[vid], ref, a, dd, po_for(vid, amt), pay_to=VENDOR_WALLETS[vid])
         emit(b1, "over_cap", text, {"fake": False, "vendor_id": vid, "ref_key": ref_key(ref), "true_amount": f"{amt:.2f}",
                                      "hostile_line": honest_line(VENDORS[vid], ref, a, dd, VENDOR_WALLETS[vid])})
     # duplicates in batch 2: 15 (5 exact copies, 5 reminder copies, 5 with the reference re-typed)
@@ -240,6 +246,7 @@ def main(argv: list[str]) -> int:
             hl["reference"] = ref.replace("-", " ").lower()
         emit(b2, "duplicate", t2, {"fake": False, "vendor_id": rec["vendor_id"], "ref_key": rec["ref_key"],
                                     "true_amount": None, "duplicate_of": f, "dup_kind": kind, "hostile_line": hl})
+    (out / "pos.csv").write_text("agent_id,po,amount\n" + "".join(f"{v},{po},{a}\n" for v, po, a in pos))
     (out / "truth.json").write_text(json.dumps({"seed": seed, "families": FAMILIES, "vendors": VENDORS,
                                                 "attackers": ATTACKERS, "files": truth}, indent=1, ensure_ascii=False))
     by = {}

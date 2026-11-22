@@ -96,6 +96,42 @@ class Registry:
 
 
 @dataclass
+class AmountPolicy:
+    """What the payer expects to owe, set by the payer (never read from an invoice). Closes the gap a document check can't:
+    an invoice whose AMOUNT was edited, with the payee untouched.
+      purchase_orders: registered vendor name -> {PO number (letters and digits only): amount}. When a vendor has any, its invoice
+                       must cite one of its POs and match that PO's amount exactly (the classic PO match).
+      bands:           registered vendor name -> highest amount the payer expects on one invoice; above it is held.
+    A vendor with neither is checked as before."""
+    purchase_orders: dict[str, dict[str, Decimal]] = field(default_factory=dict)
+    bands: dict[str, Decimal] = field(default_factory=dict)
+
+
+PO_REF = re.compile(r"\b(?:P\.?O\.?|purchase order)\s*(?:no\.?|number|#)?\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{2,})", re.I)
+
+
+def po_key(s: str) -> str:
+    return re.sub(r"[^A-Z0-9]", "", s.upper())
+
+
+def amount_expectation(source: str, amount: Decimal, reg_name: str, policy: AmountPolicy) -> str | None:
+    """None if the amount is what the payer expects from this vendor, else the reason to hold it."""
+    pos = policy.purchase_orders.get(reg_name) or {}
+    if pos:
+        cited = [po_key(m) for m in PO_REF.findall(source)]
+        known = [c for c in cited if c in pos]
+        if not known:
+            return "no purchase order of this vendor is cited on the invoice"
+        if all(pos[c] != amount for c in known):
+            want = ", ".join(f"{c} = {pos[c]}" for c in known)
+            return f"amount {amount} differs from the purchase order ({want})"
+    band = policy.bands.get(reg_name)
+    if band is not None and amount > band:
+        return f"amount {amount} is above this vendor's usual range (up to {band})"
+    return None
+
+
+@dataclass
 class Verdict:
     decision: str  # PAYABLE | HOLD | BLOCK
     cop: str
@@ -105,7 +141,7 @@ class Verdict:
     warnings: list[str] = field(default_factory=list)
 
 
-def check_line(source: str, line: dict, registry: Registry) -> Verdict:
+def check_line(source: str, line: dict, registry: Registry, policy: AmountPolicy | None = None) -> Verdict:
     """line = {vendor, wallet, amount, currency, reference, due_date (ISO)} as staged by the model."""
     text = norm_text(source)
     reasons: list[str] = []
@@ -154,9 +190,14 @@ def check_line(source: str, line: dict, registry: Registry) -> Verdict:
                     break
         checks.setdefault("no_lookalike_vendor_names", True)
 
+    why = None
+    if policy and reg_name and cop == "MATCH" and checks["amount_in_document"]:
+        why = amount_expectation(source, amt, reg_name, policy)
+        checks["amount_as_expected"] = why is None
+
     for k, ok in checks.items():
         if not ok:
-            reasons.append(k.replace("_", " ") + ": failed")
+            reasons.append(why if k == "amount_as_expected" else k.replace("_", " ") + ": failed")
     if cop == "NO_MATCH" or not checks["wallet_is_registered_for_vendor"]:
         decision = "BLOCK"
     elif reasons or cop == "CLOSE_MATCH":

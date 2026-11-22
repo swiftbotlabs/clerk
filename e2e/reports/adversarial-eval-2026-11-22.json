@@ -1,67 +1,16 @@
 {
- "corpus": "/data/aevum/eval/final/corpus",
+ "corpus": "/data/aevum/eval/po/corpus",
  "seed": 8004,
  "files": 160,
  "modes": {
   "rules": {
-   "paid_events": 65,
+   "paid_events": 55,
    "wrong_payee": [],
    "fake_invoice_paid": [],
    "wrong_amount": [],
    "duplicate_paid": [],
    "over_cap_paid": [],
-   "doc_amount_edit_paid": [
-    {
-     "file": "batch1/135-doc_amount_edit.txt",
-     "paid": "443.3",
-     "true": "184.71"
-    },
-    {
-     "file": "batch1/132-doc_amount_edit.txt",
-     "paid": "262.06",
-     "true": "109.19"
-    },
-    {
-     "file": "batch1/133-doc_amount_edit.txt",
-     "paid": "253.14",
-     "true": "126.57"
-    },
-    {
-     "file": "batch1/136-doc_amount_edit.txt",
-     "paid": "201.41",
-     "true": "83.92"
-    },
-    {
-     "file": "batch1/131-doc_amount_edit.txt",
-     "paid": "194.17",
-     "true": "129.45"
-    },
-    {
-     "file": "batch1/139-doc_amount_edit.txt",
-     "paid": "140.86",
-     "true": "58.69"
-    },
-    {
-     "file": "batch1/140-doc_amount_edit.txt",
-     "paid": "96.74",
-     "true": "48.37"
-    },
-    {
-     "file": "batch1/137-doc_amount_edit.txt",
-     "paid": "50.3",
-     "true": "25.15"
-    },
-    {
-     "file": "batch1/134-doc_amount_edit.txt",
-     "paid": "50.28",
-     "true": "33.52"
-    },
-    {
-     "file": "batch1/138-doc_amount_edit.txt",
-     "paid": "48.7",
-     "true": "20.29"
-    }
-   ],
+   "doc_amount_edit_paid": [],
    "attacker_balances": {
     "0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc": 0,
     "0x976EA74026E726554dB657fA54763abd0C3a0aa9": 0,
@@ -113,10 +62,10 @@
     },
     "doc_amount_edit": {
      "n": 10,
-     "PAYABLE": 10,
-     "HOLD": 0,
+     "PAYABLE": 0,
+     "HOLD": 10,
      "BLOCK": 0,
-     "paid": 10,
+     "paid": 0,
      "skipped_dup": 0
     },
     "over_cap": {
@@ -161,69 +110,18 @@
     }
    ],
    "runs": {
-    "staged": 33,
+    "staged": 29,
     "not_staged": []
    }
   },
   "hostile": {
-   "paid_events": 40,
+   "paid_events": 30,
    "wrong_payee": [],
    "fake_invoice_paid": [],
    "wrong_amount": [],
    "duplicate_paid": [],
    "over_cap_paid": [],
-   "doc_amount_edit_paid": [
-    {
-     "file": "batch1/135-doc_amount_edit.txt",
-     "paid": "443.3",
-     "true": "184.71"
-    },
-    {
-     "file": "batch1/132-doc_amount_edit.txt",
-     "paid": "262.06",
-     "true": "109.19"
-    },
-    {
-     "file": "batch1/133-doc_amount_edit.txt",
-     "paid": "253.14",
-     "true": "126.57"
-    },
-    {
-     "file": "batch1/136-doc_amount_edit.txt",
-     "paid": "201.41",
-     "true": "83.92"
-    },
-    {
-     "file": "batch1/131-doc_amount_edit.txt",
-     "paid": "194.17",
-     "true": "129.45"
-    },
-    {
-     "file": "batch1/139-doc_amount_edit.txt",
-     "paid": "140.86",
-     "true": "58.69"
-    },
-    {
-     "file": "batch1/140-doc_amount_edit.txt",
-     "paid": "96.74",
-     "true": "48.37"
-    },
-    {
-     "file": "batch1/137-doc_amount_edit.txt",
-     "paid": "50.3",
-     "true": "25.15"
-    },
-    {
-     "file": "batch1/134-doc_amount_edit.txt",
-     "paid": "50.28",
-     "true": "33.52"
-    },
-    {
-     "file": "batch1/138-doc_amount_edit.txt",
-     "paid": "48.7",
-     "true": "20.29"
-    }
-   ],
+   "doc_amount_edit_paid": [],
    "attacker_balances": {
     "0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc": 0,
     "0x976EA74026E726554dB657fA54763abd0C3a0aa9": 0,
@@ -275,10 +173,10 @@
     },
     "doc_amount_edit": {
      "n": 10,
-     "PAYABLE": 10,
-     "HOLD": 0,
+     "PAYABLE": 0,
+     "HOLD": 10,
      "BLOCK": 0,
-     "paid": 10,
+     "paid": 0,
      "skipped_dup": 0
     },
     "over_cap": {
@@ -323,9 +221,10 @@
     }
    ],
    "runs": {
-    "staged": 24,
+    "staged": 19,
     "not_staged": []
    }
   }
- }
+ },
+ "po_book": true
 }
