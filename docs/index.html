@@ -36,24 +36,48 @@ h2{font-size:20px;margin:40px 0 4px}h2+p{color:var(--muted);margin:0 0 14px;font
 .item ul{margin:6px 0 0;padding-left:18px;color:var(--muted);font-size:14px}
 .status{font-size:14px;color:var(--muted)}.status a{color:inherit}
 .empty{color:var(--muted);font-style:italic}
+.held{grid-column:1/-1;background:var(--stop-bg);color:var(--ink);border-left:4px solid var(--stop);border-radius:0 8px 8px 0;padding:10px 12px;font-size:15px}
+.held strong{color:var(--stop)}
 .load{background:var(--paper);border:1.5px dashed var(--rule);border-radius:14px;padding:16px 18px}
 @media (max-width:560px){h1{font-size:27px}.slip{grid-template-columns:1fr}.amt{text-align:left}}
 @media (prefers-reduced-motion:no-preference){.run.done{transition:border-color .4s}.run.done{border-color:var(--ok)}}
 </style></head>
 <body><main>
-<header><div class="brand">Clerk</div><div style="display:flex;gap:10px;align-items:center"><span class="net" id="net">Wallet not connected</span><button id="connect">Connect wallet</button></div></header>
-<h1 id="headline">Pay runs waiting for you</h1>
+<header><div class="brand">Clerk</div><div style="display:flex;gap:10px;align-items:center"><span class="net" id="net">Wallet not connected</span><button id="connect">Connect wallet</button><noscript><span class="net">(JavaScript is only needed to approve)</span></noscript></div></header>
+<h1 id="headline">Nothing is waiting for you</h1>
 <p class="lede">Your AI clerk read the invoices and staged these payments. It can't pay anything itself. Each payee below is the wallet the vendor registered on Aevum, and every number is shown in the invoice it came from.</p>
 <div id="loader" class="load" hidden><label for="file">Open a pay-run report (report.json from the clerk)</label><br><input id="file" type="file" accept="application/json"></div>
-<section id="runs"></section>
-<h2>Needs your check</h2><p>The clerk did not stage these. Look at them yourself before paying anything.</p><section id="hold"></section>
-<h2>Stopped</h2><p>These failed a rule the clerk can't override.</p><section id="stop"></section>
+<section id="runs"><article class="run done" data-run="3"><div class="runhead"><div><div class="status">Run 3: Paid</div><div class="total">0.45 tUSD8<small>2 invoices</small></div></div><div class="actions"></div></div><div class="slip"><div class="who">Acme Supplies Ltd<span class="id">agent #1698</span></div><div class="amt">0.25 tUSD8</div><div class="meta"><span class="verdict v-ok">Payee confirmed</span>Invoice INV-1006, due 2026-12-08, to 0x44e1…Ece0</div><div class="src"><div>Item: 1 x packing tape case, <mark>0.25</mark></div><div>Invoice No: <mark>INV-1006</mark></div><div>Due date: <mark>2026-12-08</mark></div></div></div><div class="slip"><div class="who">Globex Logistics<span class="id">agent #1699</span></div><div class="amt">0.20 tUSD8</div><div class="meta"><span class="verdict v-ok">Payee confirmed</span>Invoice G-79, due 2026-12-04, to 0xdA28…6B72</div><div class="src"><div>Courier, 1 parcel: <mark>0.20</mark></div><div>Invoice: <mark>G-79</mark></div><div>Due date: <mark>2026-12-04</mark></div></div></div></article></section>
+<h2>Needs your check</h2><p>The clerk did not stage these. Look at them yourself before paying anything.</p><section id="hold"><div class="item"><span class="verdict v-hold">Name is close, not exact</span><strong>Acme Suppiles Ltd</strong> · 0.45 tUSD8<ul><li>name is a close match to the registered &#x27;Acme Supplies Ltd&#x27; (0.92): a human must confirm</li></ul></div></section>
+<h2>Stopped</h2><p>These failed a rule the clerk can't override.</p><section id="stop"><div class="item"><span class="verdict v-stop">Stopped</span><strong>Acme Supplies Ltd</strong> · 0.90 tUSD8<ul><li>wallet is registered for vendor: failed</li><li>the invoice prints a wallet that is NOT the vendor&#x27;s registered wallet: possible redirection fraud</li><li>the document contains instruction-like text; it was treated as data</li></ul></div></section>
+<h2>On Aevum testnet</h2><p>Every step below is a transaction you can open on the explorer. Contracts: <a href="https://explorer-test.qday.info/address/0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541">PayRunV2</a>, <a href="https://explorer-test.qday.info/address/0x2EE29a167CDDb964aAB9C899ea9Ae89847e3Da98">PayRun</a>, <a href="https://explorer-test.qday.info/address/0x4Ea16B1bb18005344FC77491F3809a47C74c01a4">ClerkStagePolicy</a> (verified source).</p><section id="record" class="item"><ul class="rec"><li>Run 1 staged by the clerk&#x27;s session key (2 invoices; a redirect stopped, a look-alike held): <a href="https://explorer-test.qday.info/tx/0xf73f54faa5ad8feed72acf43a53ecbec78dd6287756ee83224f6badc59e70a42">0xf73f54fa…</a></li><li>Run 1 paid by the owner&#x27;s smart account (UserOperation): <a href="https://explorer-test.qday.info/tx/0xdde4f5aaac0670d846bb41a28293cd81c37526087d428b917f1b39f83bf4c2f9">0xdde4f5aa…</a></li><li>Run 3 (shown above) staged: <a href="https://explorer-test.qday.info/tx/0x24f2d55b9a0c2f2edf17c6215c6ff324336ebb50c7c58b74b2012885ae423b33">0x24f2d55b…</a></li><li>Run 3 paid from this page: <a href="https://explorer-test.qday.info/tx/0xf01567cde9d18e6d06de1c473de937b41a9ec6c8bdb6cc8b25452f2df4e83303">0xf01567cd…</a></li><li>PayRunV2 deployed (payee-change hold): <a href="https://explorer-test.qday.info/tx/0x9f98fa4750cf78c4367b31e4cc886393a67820718802094c4b7eaaae44350ca5">0x9f98fa47…</a></li><li>A new payee staged on hold, the owner&#x27;s pay attempt blocked, nothing paid: <a href="https://explorer-test.qday.info/tx/0xdfc4b2add2348a0c2253b6b37568b8539bb706a024e45f3fdaa0c5549ad83a1a">0xdfc4b2ad…</a></li><li>Owner confirms a payee early (audit event on chain): <a href="https://explorer-test.qday.info/tx/0x1353239ca2467412fc843090be685e608af91b1967975fcb1ebf7381b3813316">0x1353239c…</a></li><li>The clerk&#x27;s key as a Kernel permission: first UserOperation enables it and stages a run: <a href="https://explorer-test.qday.info/tx/0xfc7f9f35fac800fb49889bb2ac855bc67dc3d25ea34c2bbe472dac824075a368">0xfc7f9f35…</a></li><li>The owner revokes the clerk&#x27;s permission: <a href="https://explorer-test.qday.info/tx/0x6a5b447aebeeee5743177da0d5f106f35ad8368307d81decead4183684d68cdb">0x6a5b447a…</a></li></ul></section>
+<p class="status">Rendered from Aevum testnet block 3841298 on 22 Nov 2026 14:56 UTC. With JavaScript the page re-reads the chain live; connect the owner's wallet only to approve.</p>
 </main>
 <script type="module">
 import { createWalletClient, createPublicClient, custom, http, parseAbi, formatUnits, encodeFunctionData, encodePacked } from './vendor/viem-2.21.0.js';   // vendored (esm.sh viem@2.21.0 es2022 bundle), sha256 in README
 const ABI = parseAbi([
   'function runs(uint256) view returns (uint8 status, address stagedBy, uint64 stagedAt, uint128 total, uint32 lineCount)',
-  'function execute(uint256 runId)', 'function reject(uint256 runId, string reason)', 'function owner() view returns (address)']);
+  'function execute(uint256 runId)', 'function reject(uint256 runId, string reason)', 'function owner() view returns (address)',
+  // PayRunV2 payee-change hold (the v1 PayRun has none of these; the page then behaves as before)
+  'function canExecute(uint256 runId) view returns (bool ok, uint256 line, uint8 reason, uint64 releaseAt)',
+  'function lineOf(uint256 runId, uint256 i) view returns ((uint256 payeeAgentId, address payee, uint128 amount, bytes32 invoiceHash, bytes32 invoiceRef))',
+  'function confirmPayee(uint256 agentId, address wallet)']);
+const BLOCKED_TOPIC = '0xeccfe563df0552cce6bb5602228af8212d6b0abec81deed0180430dbc095511e'; // PaymentBlocked(uint256,uint256,uint256,address,uint8,uint64)
+const when = (t) => new Date(Number(t) * 1000).toLocaleString('en', { dateStyle: 'medium', timeStyle: 'short' });
+// Why PayRunV2 won't pay a run yet. Read from the contract, never from the report.
+async function holdOf(id, items) {
+  let r; try { r = await pub().readContract({ address: report.payrun, abi: ABI, functionName: 'canExecute', args: [BigInt(id)] }); } catch { return null; }
+  const [ok, line, reason, releaseAt] = r; if (ok || ![1, 2, 3].includes(Number(reason))) return null;
+  const l = await pub().readContract({ address: report.payrun, abi: ABI, functionName: 'lineOf', args: [BigInt(id), line] });
+  const agent = String(l.payeeAgentId), payee = l.payee;
+  const name = items.find((i) => String(i.agent_id) === agent)?.registered_name || 'agent #' + agent;
+  const text = Number(reason) === 1
+    ? `<strong>Payment held.</strong> ${esc(name)}'s wallet ${esc(short(payee))} is new or just changed. The hold ends ${esc(when(releaseAt))}. Check the new details with the vendor on a number you already have (not one from the invoice), then confirm the payee.`
+    : Number(reason) === 2
+    ? `<strong>Payment held.</strong> This run was staged while ${esc(name)}'s wallet ${esc(short(payee))} was still on hold, so waiting won't release it. Confirm the wallet with the vendor first.`
+    : `<strong>Refused.</strong> ${esc(name)}'s registered wallet changed after this run was staged. Reject it; the clerk stages it again and the new wallet is held.`;
+  return { reason: Number(reason), agent, payee, name, text };
+}
 // The owner may be an ERC-4337 smart account (Kernel v3.1 on Aevum): then the connected wallet is its signing key, signs a
 // UserOperation, and submits it to Aevum's EntryPoint v0.7 itself.
 const EP = '0x0000000071727De22E5E9d8BAf0edAc6f37da032';
@@ -105,11 +129,11 @@ function snippet(text, value) {
   const v = String(value ?? ''); const i = text.toLowerCase().indexOf(v.toLowerCase());
   return '<div>' + (v && i >= 0 ? esc(text.slice(0, i)) + '<mark>' + esc(text.slice(i, i + v.length)) + '</mark>' + esc(text.slice(i + v.length)) : esc(text)) + '</div>';
 }
-function slip(it) {
+function slip(it, hold) {
   const p = it.proposed, e = it.evidence || {};
   return `<div class="slip"><div class="who">${esc(it.registered_name)}<span class="id">agent #${esc(it.agent_id)}</span></div>
     <div class="amt">${money(it.units)}</div>
-    <div class="meta"><span class="verdict v-ok">Payee confirmed</span>Invoice ${esc(p.reference)}, due ${esc(p.due_date)}, to ${esc(short(p.wallet))}</div>
+    <div class="meta">${hold && String(it.agent_id) === hold.agent ? '<span class="verdict v-hold">Registered wallet, on hold</span>' : '<span class="verdict v-ok">Payee confirmed</span>'}Invoice ${esc(p.reference)}, due ${esc(p.due_date)}, to ${esc(short(p.wallet))}</div>
     <div class="src">${snippet(e.amount, p.amount)}${snippet(e.reference, p.reference)}${snippet(e.due_date, p.due_date)}</div></div>`;
 }
 async function render() {
@@ -122,11 +146,13 @@ async function render() {
     let st = 1;
     try { st = Number((await pub().readContract({ address: report.payrun, abi: ABI, functionName: 'runs', args: [BigInt(id)] }))[0]); } catch {}
     if (st === 1) waiting++;
+    const hold = st === 1 ? await holdOf(id, byRun[id]) : null;
     const total = byRun[id].reduce((s, i) => s + BigInt(i.units), 0n);
     parts.push(`<article class="run ${st === 2 ? 'done' : ''}" data-run="${id}"><div class="runhead"><div><div class="status">Run ${id}: ${STATUS[st] || 'Unknown'}</div>
       <div class="total">${money(total)}<small>${byRun[id].length} invoice${byRun[id].length > 1 ? 's' : ''}</small></div></div>
-      <div class="actions">${st === 1 && trusted() ? `<button class="pay" data-act="execute" data-run="${id}">Approve and pay</button><button data-act="reject" data-run="${id}">Reject</button>` : ''}</div></div>
-      ${byRun[id].map(slip).join('')}<div class="slip status" id="tx-${id}" ${notes[id] ? '' : 'hidden'}>${notes[id] || ''}</div></article>`);
+      <div class="actions">${st === 1 && trusted() ? (hold ? (hold.reason !== 3 ? `<button data-act="confirm" data-run="${id}" data-agent="${esc(hold.agent)}" data-wallet="${esc(hold.payee)}" data-name="${esc(hold.name)}">Confirm payee</button>` : '')
+        : `<button class="pay" data-act="execute" data-run="${id}">Approve and pay</button>`) + `<button data-act="reject" data-run="${id}">Reject</button>` : ''}</div></div>
+      ${hold ? `<div class="slip"><div class="held" role="alert">${hold.text}</div></div>` : ''}${byRun[id].map((it) => slip(it, hold)).join('')}<div class="slip status" id="tx-${id}" ${notes[id] ? '' : 'hidden'}>${notes[id] || ''}</div></article>`);
   }
   $('#headline').textContent = waiting === 0 ? (ids.length ? 'Nothing is waiting for you' : 'Nothing to approve')
     : waiting === 1 ? 'One pay run is waiting for you' : `${waiting} pay runs are waiting for you`;
@@ -151,19 +177,27 @@ document.addEventListener('click', async (ev) => {
   if (!wallet) await connect(); if (!wallet) return;
   const id = BigInt(b.dataset.run), out = $('#tx-' + b.dataset.run); out.hidden = false;
   try {
-    const args = b.dataset.act === 'reject' ? [id, prompt('Why are you rejecting this run?') || 'rejected by the owner'] : [id];
-    out.textContent = b.dataset.act === 'execute' ? 'Paying… confirm in your wallet.' : 'Rejecting… confirm in your wallet.';
+    let fn = b.dataset.act, args;
+    if (fn === 'confirm') {
+      if (!/^\d{1,18}$/.test(b.dataset.agent || '') || !/^0x[0-9a-fA-F]{40}$/.test(b.dataset.wallet || '')) throw new Error('bad payee data');
+      if (!confirm(`Confirm that ${b.dataset.wallet} is ${b.dataset.name}'s wallet? Only after you checked it with the vendor on a known channel.`)) { out.hidden = true; return; }
+      fn = 'confirmPayee'; args = [BigInt(b.dataset.agent), b.dataset.wallet];
+    } else args = fn === 'reject' ? [id, prompt('Why are you rejecting this run?') || 'rejected by the owner'] : [id];
+    out.textContent = fn === 'execute' ? 'Paying… confirm in your wallet.' : fn === 'confirmPayee' ? 'Confirming the payee… confirm in your wallet.' : 'Rejecting… confirm in your wallet.';
     const owner = await pub().readContract({ address: report.payrun, abi: ABI, functionName: 'owner' });
     let hash;
     if ((await pub().getBytecode({ address: owner }))?.length > 2) {   // smart-account owner: sign a UserOperation
       out.textContent += ' (signing for the smart account ' + short(owner) + ')';
-      hash = await viaSmartAccount(owner, encodeFunctionData({ abi: ABI, functionName: b.dataset.act, args }));
+      hash = await viaSmartAccount(owner, encodeFunctionData({ abi: ABI, functionName: fn, args }));
     } else {
-      hash = await wallet.writeContract({ account, chain: null, address: report.payrun, abi: ABI, functionName: b.dataset.act, args, type: 'legacy' });
+      hash = await wallet.writeContract({ account, chain: null, address: report.payrun, abi: ABI, functionName: fn, args, type: 'legacy' });
       await pub().waitForTransactionReceipt({ hash });
     }
     const ex = CHAINS[chainId]?.explorer;
-    notes[b.dataset.run] = (b.dataset.act === 'execute' ? 'Paid. ' : 'Rejected. ') + (ex ? `<a href="${ex}/tx/${hash}" target="_blank" rel="noopener">View transaction</a>` : 'Transaction ' + esc(hash));
+    const rc = await pub().getTransactionReceipt({ hash });
+    const blocked = rc.logs.some((l) => l.address.toLowerCase() === report.payrun.toLowerCase() && l.topics[0] === BLOCKED_TOPIC);
+    notes[b.dataset.run] = (fn === 'execute' ? (blocked ? 'Not paid: the payee hold blocked it. Nothing moved. ' : 'Paid. ')
+      : fn === 'confirmPayee' ? 'Payee confirmed (logged on chain). ' : 'Rejected. ') + (ex ? `<a href="${ex}/tx/${hash}" target="_blank" rel="noopener">View transaction</a>` : 'Transaction ' + esc(hash));
     await render();
   } catch (e) { out.textContent = 'Not sent: ' + (e.shortMessage || e.message || e); }
 });
