@@ -17,7 +17,7 @@ flowchart TB
     P[Clerk permission<br/>ECDSASigner + ClerkStagePolicy<br/>only PayRunV2.stage, per-run cap,<br/>expiry, no paymaster, gas budget]
     O[Owner root key<br/>approve, execute, confirmPayee,<br/>revoke]
   end
-  S -- UserOperation signed by the clerk key --> P
+  S -- UserOperation signed by the clerk key<br/>(or a PayRunV2 session key) --> P
   P -- call --> V[(PayRunV2<br/>stage: registered wallet? caps? pay-once?<br/>execute: re-check payee, hold, all-or-nothing)]
   R[(ERC-8004 identity registry<br/>getAgentWallet)] -. read at stage and execute .-> V
   W[Approval page<br/>clerk.swiftbotlab.workers.dev] -- owner UserOperation --> O
@@ -39,8 +39,10 @@ flowchart TB
    identities (loaded by agentId, never by name search), and the wallet must be that identity's registered wallet. A near-copy of the vendor's
    name anywhere in the document holds the line for a human. Result: PAYABLE, HOLD or BLOCK.
 3. **Stage.** PAYABLE lines get a pay-once key (vendor agentId + normalised invoice number). Lines already paid or staged are skipped, and so are
-   duplicates inside the batch. The rest are packed under the caps, simulated, then sent as one UserOperation under the clerk permission.
-   PayRunV2 checks again on chain: registered wallet, caps, pay-once.
+   duplicates inside the batch. The rest are packed under the caps and simulated, then sent with the clerk's key. In the canonical
+   deployment that is a UserOperation under the Kernel permission, as run on testnet with `contracts/script/ClerkPermission.s.sol`.
+   `stage.py stage` also signs with a PayRunV2 session key (`grantSession`), the path the local demos and the eval use.
+   Either way, PayRunV2 checks again on chain: registered wallet, caps, pay-once.
 4. **Approve.** The owner opens the approval page. Each line shows its payee verdict and the invoice line behind every number. The owner
    pays with one UserOperation from the account. `execute` re-reads the registry. A new or changed wallet is held (`PaymentBlocked`,
    nothing moves) until the owner confirms that exact wallet or the hold window passes. A run whose payee changed after staging is closed.
