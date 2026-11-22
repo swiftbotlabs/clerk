@@ -56,7 +56,8 @@ flowchart TB
 | A changed vendor wallet can't be paid without the owner | PayRunV2 hold (`confirmPayee` is owner-only) | 19 hold tests incl. fuzzed A to B to A; testnet `PaymentBlocked` tx |
 | The AI's key can't pay or drain | ClerkStagePolicy at UserOperation validation | 21 unit + 7 fork tests; 14 mutants; testnet refusals |
 | Each vendor invoice is paid at most once | pay-once key in `stage.py` + PayRunV2's `paidInRun` / `stagedInRun` | eval: re-sent copies (same file, reminder copy, re-typed number) never paid twice |
-| Model-invented or edited values aren't paid | `check.py` | 12 check tests; eval with a hostile extractor |
+| Model-invented or edited values aren't paid | `check.py` | check tests; eval with a hostile extractor |
+| An amount edited inside a real vendor's invoice isn't paid | `check.py` `AmountPolicy`: the payer's purchase-order match, or per-vendor amount bands | 6 tests; eval: 10/10 held with a PO book |
 | Spending is bounded | per-run cap (policy + PayRunV2), per-day cap (PayRunV2), expiry, revoke | unit tests; eval: 0 over-cap payments |
 
 ## Deployed (Aevum testnet, chain 44005)
