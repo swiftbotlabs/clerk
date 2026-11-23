@@ -27,7 +27,7 @@ else
   echo "SKIP  clerk session checks (pass the clerk's address)"
 fi
 code=$(curl -s -o /dev/null -w '%{http_code}' -m 20 https://clerk.swiftbotlab.workers.dev/); [ "$code" = 200 ] && ok "approval page 200" || bad "approval page HTTP $code"
-curl -s -m 20 https://clerk.swiftbotlab.workers.dev/ | grep -q 'id="record"' && ok "page is server-rendered (testnet record present without JS)" || bad "page has no server-rendered record (old deploy?)"
+page=$(curl -s -m 20 https://clerk.swiftbotlab.workers.dev/); grep -q 'id="record"' <<<"$page" && ok "page is server-rendered (testnet record present without JS)" || bad "page has no server-rendered record (old deploy?)"
 code=$(curl -s -o /dev/null -w '%{http_code}' -m 20 https://bundler.qday.info/); [ "$code" != 000 ] && ok "QDay bundler reachable (HTTP $code)" || bad "QDay bundler unreachable: use self-bundled handleOps (e2e/kernel.sh)"
 code=$(curl -s -o /dev/null -w '%{http_code}' -m 20 'https://www.youtube.com/oembed?url=https://youtu.be/WpnxGX7nYnM'); [ "$code" = 200 ] && ok "demo video plays by link (fallback)" || bad "demo video oEmbed HTTP $code"
 exit $fail
