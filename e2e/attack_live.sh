@@ -4,6 +4,7 @@
 # the wallet the vendor registered for its ERC-8004 identity, so the chain refuses: PayeeNotRegistered. The failed tx is sent on purpose
 # (explicit gas limit, no estimate) so the refusal is on the explorer, not just in a simulation. Testnet gas only; no tUSD8 can move.
 # Usage (testnet, local agent):  KEYS=<testnet keys json> PAYRUN=<demo contract> e2e/attack_live.sh
+#        (read-only, no key, nothing sent): SIM_ONLY=1 FORK=1 CLERK=<clerk address> e2e/attack_live.sh
 #        (rehearsal on a local fork): RPC=http://127.0.0.1:18545 FORK=1 CLERK=<addr with a session on the fork> PAYRUN=... e2e/attack_live.sh
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -30,6 +31,7 @@ ERR=$(grep -o '0x[0-9a-fA-F]\{8,\}' <<<"$SIM" | tail -1 || true)
 DEC=$(cast decode-error --sig "PayeeNotRegistered(uint256,uint256,address,address)" "$ERR" 2>/dev/null | tr '\n' ' ' || true)
 echo "simulation: ${DEC:+PayeeNotRegistered(}${DEC:-$SIM}${DEC:+)}"
 grep -qi "$(echo ${REGISTERED#0x} | cut -c1-8)" <<<"$DEC$SIM" || { echo "UNEXPECTED: the refusal is not PayeeNotRegistered with the registered wallet; stop and read it"; exit 2; }
+[ "${SIM_ONLY:-0}" = 1 ] && { echo "SIM_ONLY: refusal shown by the contract (read-only call), nothing sent"; exit 0; }
 before=$(cast call $TUSD "balanceOf(address)(uint256)" $ATTACKER --rpc-url $R | cut -d' ' -f1)
 # 2) send it anyway, so the refusal is on chain
 TX=$(cast send $PAYRUN "$SIG" "$LINES" "${AUTH[@]}" --rpc-url $R --legacy --gas-limit 400000 --async)
