@@ -1,0 +1,122 @@
+{
+ "gas_owner": "0xc56cd5b22c1550ccf1afbae058735545d88b3344d712cf7e87e7017eaf0e4bc8",
+ "gas_clerk": "0xffdc4f3ce75551125a79209481b9f07e04bd02cdbbc85313e03f65f00ebcd776",
+ "gas_daycap": "0x4e166fa451e7e5670eda7db2b6be382488cb3b4a2f0e34f93db9bc957aa24474",
+ "gas_revoked": "0x32dc925e9b60deab95c36174ea72047eec058fbb56238e91ec834a06fc6f87fc",
+ "gas_expired": "0x66bc4ca7df5a9cbb30a999fe2b3bc6d1f8e54d1360c840c165558950fece7f88",
+ "gas_stranger": "0xb8c45b1c9eb9881d45405449c86fdf649dedf9d28a6221234201300d86fde9e3",
+ "gas_vendor_hijack": "0x43848271f7e9ac5bd471fe7719038c0262c10eca42cc2cd7ee6eab07caaf7ad7",
+ "gas_vendor_new": "0xfff7e5439a6f527ceee7be8664800d3921945402d7b98db71e77ddf6388f2b08",
+ "gas_vendor_acme": "0x391b19db5ef771e99c8a12e31298c98088bca6f621e90bf208741e20f14340d2",
+ "gas_treasury": "0xfa9d0e1045df608bd67c4285d400fb9541ccf0ffb3f5db97af6a078cc89e4de3",
+ "tusd_treasury": "0x55640d141289e020d7568fb684a44b8ba31ac23e4ee6266d312674f8ef6d67b6",
+ "acme_register": "0x72f5f922b0455303f648343e0b8874b0bc7a27d15f0f00911992d94d5eba0ce8",
+ "acme_id": "1820",
+ "acme_name": "Acme Supplies Ltd",
+ "hijack_register": "0x1c036d781c676cebf7e4ceec35f3cdc9b5095eb494f7addb0bfff588cbd0cff8",
+ "hijack_id": "1821",
+ "hijack_name": "Hooli Freight",
+ "new_register": "0xd70ed9f71515123b0e271a998d85704fa9294a1ca829628f3ba64678d534bacb",
+ "new_id": "1822",
+ "new_name": "Initech Hosting",
+ "payrun_deploy_tx": "0x43691c85f9da1c958c377c3c5dc5b05834c9ad137c75e8d2269993fd57242685",
+ "payrun": "0x8034c01ba98d882abd30118235d648183d3fae52",
+ "payrun_block": "4074019",
+ "approve_cap": "0xcdbdbe8cc09b9dd3e5fa349a018fedf86d939597c69266197407b1c8840e66be",
+ "hold_window": "0xe43bc0366c1c21300c90fff3c691a1c5c9db7eaa49fad829810486f59392f1c8",
+ "confirm_acme": "0xea9e36e7589bcffd54c94e72a5a0429a25cd4337ee7e59536e2c8fadcf79cbda",
+ "confirm_hijack": "0x2103b065310662496c7f961bc0905d6760d3a7aa49d31add7f24c6fb879a48de",
+ "grant_clerk": "0xa9501a6e7284960eb088fa396fd660f88bdc4ff8e2571f2082e030f470ab7bc8",
+ "grant_daycap": "0x2273933bff1526c19ff81a85eb40e93f4b18dbf067a6d7cfe7ee3227f4dc13c7",
+ "grant_revoked": "0xf0eb1f27cfa9511b60c1c5991d0c83081d05267339e60d6b089949c09f3931be",
+ "revoke_revoked": "0xdc9d4d7f8f98254386592758f6ec07ed3c35c2d97fe3718e1e1ff6dfcc747e38",
+ "grant_expired": "0x1faf36a8ed715a6d24dc3f2041bfa56c7ed83294930b9d68e826c4124d621db8",
+ "paid_invoice_hash": "0xaafee2ed4680103649207a2bf3bb74ff700fb6d60fbfb991bdac686c415f98ae",
+ "seed_stage": "0xbe2bcb20187780778fa7d54b5a07ec7906fe21730febde5769560014817b1ef5",
+ "seed_run": "1",
+ "seed_execute": "0x2736f6ea97944e79ed29a197bdfb37aa106ff6647f1072b3bf17d9164ebc75d1",
+ "expired_at": "1795595312",
+ "checks": [
+  {
+   "name": "owner is the sandbox owner",
+   "ok": true,
+   "got": "0x4425bf594260d534e14EaFA940fee340AAcCF4Dc"
+  },
+  {
+   "name": "treasury is the sandbox treasury",
+   "ok": true,
+   "got": "0x527b1C201Ea07eB955fa265094E4231dAf28D5a2"
+  },
+  {
+   "name": "token/registry are tUSD8/ERC-8004",
+   "ok": true,
+   "got": "addresses"
+  },
+  {
+   "name": "allowance <= 0.10 tUSD8 (0.09 after the seed payment)",
+   "ok": true,
+   "got": "90000"
+  },
+  {
+   "name": "treasury holds <= 0.10 tUSD8",
+   "ok": true,
+   "got": "90000"
+  },
+  {
+   "name": "hold window 3 days",
+   "ok": true,
+   "got": "259200"
+  },
+  {
+   "name": "seed invoice paid",
+   "ok": true,
+   "got": "1"
+  },
+  {
+   "name": "clerk session: run cap 0.10",
+   "ok": true,
+   "got": "100000"
+  },
+  {
+   "name": "daycap session: 0.06 / 0.10",
+   "ok": true,
+   "got": "caps"
+  },
+  {
+   "name": "revoked session revoked",
+   "ok": true,
+   "got": "true"
+  },
+  {
+   "name": "stranger has no session",
+   "ok": true,
+   "got": "0"
+  },
+  {
+   "name": "acme trusted",
+   "ok": true,
+   "got": "state"
+  },
+  {
+   "name": "hijack trusted",
+   "ok": true,
+   "got": "state"
+  }
+ ],
+ "chain_id": 44005,
+ "rpc": "https://rpc-test.qday.info",
+ "mode": "testnet",
+ "addresses": {
+  "funder": "0x310aaBFbb6d29DC3ac864448E72c8cD63e3a25Bf",
+  "owner": "0x4425bf594260d534e14EaFA940fee340AAcCF4Dc",
+  "treasury": "0x527b1C201Ea07eB955fa265094E4231dAf28D5a2",
+  "clerk": "0xc6898b1951e7123515f5ba4FFDFAd1C39C169304",
+  "revoked": "0x9e2C4cAC5dB1b3c30C2158bebA98E55F133CdEdb",
+  "expired": "0xdDcf789EDa9eDc098CEBc6509c5b65dc31835CfF",
+  "stranger": "0x69154ef1Ae427E9361Cf51758D022198A17086ea",
+  "daycap": "0x3B6E83e7d8EDC9bB269f2f5064BE59b0Cc95cC78",
+  "vendor_acme": "0x7a0fC255948b4300c92cBc1f77371819803E5B80",
+  "vendor_hijack": "0x1aDfbb9b7F6537BfF2112848fBC77f0075D83396",
+  "vendor_new": "0xdF53A4BBCc7aD0BFe0704BC1dAE0857389002320"
+ }
+}
