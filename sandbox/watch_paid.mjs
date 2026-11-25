@@ -22,7 +22,7 @@ const rpc = opt('--rpc', 'https://rpc-test.qday.info');
 if (!(rpc === 'https://rpc-test.qday.info' || /^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(rpc))) die('rpc must be the Aevum testnet RPC or a local fork');
 const ONCE = args.includes('--once');
 const INTERVAL = Math.max(30, Number(opt('--interval', '300')));
-const MAX_FAILS = 5, CHUNK = 2000n;
+const MAX_FAILS = 5, CHUNK = 900n;   // QDay testnet RPC caps eth_getLogs at 1000 blocks (11-25)
 const cursorFile = logFile + '.cursor';
 const TUSD = '0x456569838f1d43009A91ebA4263147Afd7233483', REG = '0xF45E7f39Caba1d2055f613970575a7e7069636Be';
 const START_TREASURY = 90_000n;
