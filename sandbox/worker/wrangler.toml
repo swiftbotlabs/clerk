@@ -1,0 +1,26 @@
+# Clerk public sandbox (Aevum TESTNET only). Secrets (never in this file): SANDBOX_KEYS, SANDBOX_CONFIG, TURNSTILE_SECRET.
+# Local: npx wrangler dev --config worker/wrangler.toml --env-file work/dev.vars --var SANDBOX_DEV:1   (see test/worker.http.test.mjs)
+name = "clerk-sandbox"
+main = "src/index.mjs"
+compatibility_date = "2025-09-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+preview_urls = false
+
+[vars]
+SANDBOX_OFF = "0"          # kill switch: "1" refuses every POST /attack (page and log stay up)
+SANDBOX_DEV = "0"          # "1" only for wrangler dev against a local anvil fork
+# Turnstile site key: Cloudflare's always-pass TEST key until the real widget is created (local-agent deploy step)
+TURNSTILE_SITEKEY = "1x00000000000000000000AA"
+# Limits default to 60 s / 30 per IP per day / 300 per day; vars can only tighten them outside dev.
+
+[[durable_objects.bindings]]
+name = "SANDBOX"
+class_name = "Sandbox"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Sandbox"]
+
+[observability]
+enabled = true

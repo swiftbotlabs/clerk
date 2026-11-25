@@ -12,3 +12,5 @@ e2e/video/shots/
 DEMO.md
 sandbox/node_modules/
 sandbox/work/
+sandbox/worker/.wrangler/
+sandbox/worker/.dev.vars
