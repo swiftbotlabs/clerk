@@ -254,7 +254,7 @@ async function simulateClick(b, payrun, k) {
     const lines = [];
     if (kind === 'held') {
       lines.push(`Approve and pay now: ${r.steps[0].paid ? 'paid' : 'not paid, the hold blocks it'}. Nothing moves.`);
-      lines.push(r.steps[1].ok ? 'Confirm the payee: accepted (only the owner can do this).' : 'Confirm the payee: refused, ' + esc(r.steps[1].why));
+      lines.push(r.steps[1].ok ? 'Confirm the payee, only after you\'ve checked the vendor (call them on a number you already had): accepted (only the owner can do this).' : 'Confirm the payee: refused, ' + esc(r.steps[1].why));
     }
     lines.push(last.ok && last.paid ? `Approve and pay: <strong>paid</strong> ${tusd(last.payeeBalance - r.before.payee)} to ${esc(short(r.payee))}, the vendor's registered wallet. Treasury ${tusd(r.before.treasury)} → ${tusd(last.treasuryBalance)}.`
       : `Approve and pay: not paid (${esc(last.why || 'blocked')}).`);

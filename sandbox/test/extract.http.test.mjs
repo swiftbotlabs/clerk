@@ -72,7 +72,7 @@ test('extractor demo over HTTP', { skip, timeout: 900_000 }, async (t) => {
   });
 
   await t.test('phase 2: limits (interval, per-visitor day, global day) and gates', phase(2), async () => {
-    const S = dev(18802, ['EXTRACT_IP_DAY:2', 'EXTRACT_GLOBAL_DAY:3']);
+    const S = dev(18802, ['EXTRACT_IP_DAY:2', 'EXTRACT_GLOBAL_DAY:3', 'EXTRACT_PACE_PCT:0']);
     try {
       const txt = 'From: Acme Supplies Ltd\nInvoice No: INV-1\nAmount due: 0.05 tUSD8';
       assert.equal((await post(S.base, txt, { ip: '203.0.113.1' })).status, 200);
@@ -81,7 +81,7 @@ test('extractor demo over HTTP', { skip, timeout: 900_000 }, async (t) => {
       assert.equal((await post(S.base, txt, { ip: '203.0.113.2' })).status, 200);
       assert.equal((await post(S.base, txt, { ip: '203.0.113.3' })).status, 200);
       const gd = await post(S.base, txt, { ip: '203.0.113.4' });
-      assert.equal(gd.status, 429); assert.match(gd.text, /for everyone/);
+      assert.equal(gd.status, 429); assert.match(gd.text, /model allocation for everyone/);
       assert.equal((await post(S.base, txt, { ip: '203.0.113.5', origin: 'https://evil.test' })).status, 403);
       assert.equal((await post(S.base, '', { ip: '203.0.113.6' })).status, 400);
       assert.equal((await post(S.base, 'q'.repeat(4097), { ip: '203.0.113.7' })).status, 413);
@@ -103,6 +103,44 @@ test('extractor demo over HTTP', { skip, timeout: 900_000 }, async (t) => {
       assert.equal(r.status, 503); assert.match(r.text, /paused/);
       assert.match(await (await fetch(S.base + '/extract')).text(), /extractor demo is paused/);
       assert.equal((await fetch(S.base + '/')).status, 200);
+    } finally { S.stop(); }
+  });
+
+  await t.test('phase 4: per-/48 hour cap, demo budget (Bearer), global hourly cap', phase(4), async () => {
+    const TOKEN = 'xtest-' + 'd'.repeat(40);
+    const S = dev(18805, ['EXTRACT_IP_INTERVAL_S:0', 'EXTRACT_NET48_HOUR:2', 'EXTRACT_DEMO_DAY:1', `DEMO_TOKEN:${TOKEN}`, 'EXTRACT_GLOBAL_HOUR:4', 'EXTRACT_PACE_PCT:0']);
+    try {
+      const txt = 'From: Acme Supplies Ltd';
+      assert.equal((await post(S.base, txt, { ip: '2001:db8:aa:1::1' })).status, 200);
+      assert.equal((await post(S.base, txt, { ip: '2001:db8:aa:2::1' })).status, 200);       // another /64, same /48
+      const nh = await post(S.base, txt, { ip: '2001:db8:aa:3::1' });
+      assert.equal(nh.status, 429, 'the third /64 in the same /48 within the hour must be refused'); assert.match(nh.text, /network block/);
+      const d1 = await post(S.base, txt, { ip: '198.51.100.40', headers: { authorization: 'Bearer ' + TOKEN } });
+      assert.equal(d1.status, 200, d1.text.slice(0, 200));
+      const d2 = await post(S.base, txt, { ip: '198.51.100.41', headers: { authorization: 'Bearer ' + TOKEN } });
+      assert.equal(d2.status, 429, 'the demo budget (1/day here) must hold'); assert.match(d2.text, /Demo budget used/);
+      assert.equal((await post(S.base, txt, { ip: '198.51.100.42' })).status, 200);         // 3rd visitor try this hour (demo not counted)
+      assert.equal((await post(S.base, txt, { ip: '198.51.100.43' })).status, 200);         // 4th
+      const gh = await post(S.base, txt, { ip: '198.51.100.44' });
+      assert.equal(gh.status, 429, 'the global hourly cap (4 here) must hold'); assert.match(gh.text, /this hour/);
+      assert.ok(Number(gh.headers.get('retry-after')) > 0);
+    } finally { S.stop(); }
+  });
+
+  await t.test('phase 5: pacing keeps part of the daily budget for later hours', phase(5), async () => {
+    const S = dev(18806, ['EXTRACT_IP_INTERVAL_S:0', 'EXTRACT_GLOBAL_DAY:24', 'EXTRACT_PACE_PCT:100']);
+    try {
+      const h0 = new Date().getUTCHours();
+      let ok = 0, last = null;
+      for (let i = 0; i < 25; i++) {
+        last = await post(S.base, 'From: Acme Supplies Ltd', { ip: `198.51.100.${100 + i}` });
+        if (last.status !== 200) break;
+        ok++;
+      }
+      const h1 = new Date().getUTCHours();
+      assert.equal(last.status, 429, 'pacing never refused');
+      assert.match(last.text, h0 === 23 ? /this hour|for everyone/ : /this hour/);
+      assert.ok(ok === h0 + 1 || ok === h1 + 1, `paced cap: ${ok} tries at UTC hour ${h0}..${h1} (expected hour + 1)`);
     } finally { S.stop(); }
   });
 });

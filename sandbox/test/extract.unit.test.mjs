@@ -2,7 +2,7 @@
 // Plain `node --test`; no network (Turnstile siteverify and the model are fakes).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseModelLine, proposeLine, handleExtract, renderExtract, extractLimitsFrom, EXTRACT_LIMITS, sampleText, MODEL, vendorRegistry, _resetRegistryCache } from '../worker/src/extract.mjs';
+import { parseModelLine, proposeLine, handleExtract, renderExtract, extractLimitsFrom, EXTRACT_LIMITS, sampleText, MODEL, vendorRegistry, _resetRegistryCache, pacedDayCap } from '../worker/src/extract.mjs';
 import { checkLine } from '../lib/check.mjs';
 
 const A = (c) => '0x' + c.repeat(40);
@@ -124,6 +124,16 @@ test('POST /extract: gates (origin, type, size, empty, kill switches, Turnstile 
   r = await run(req({ text: 'x' }), env, { registry: async () => { throw new Error('rpc down'); } }); assert.equal(r.status, 503); assert.equal(await code(r), 'chain');
 });
 
+test('POST /extract: a failed registry read does not use up the visitor\'s try (read before extractReserve)', async () => {
+  const env = { ...PROD, AI: fakeAI('{}') };
+  const stub = { calls: 0, async extractReserve() { this.calls++; return { status: 200 }; } };
+  const r = await run(req({ text: 'From: Acme Supplies Ltd' }), env, { stub, registry: async () => { throw new Error('rpc down'); } });
+  assert.equal(r.status, 503);
+  assert.equal(stub.calls, 0, 'the try was counted although the chain read failed');
+  const ok = await run(req({ text: 'From: Acme Supplies Ltd' }), env, { stub });   // positive control: a good read does count
+  assert.equal(ok.status, 200); assert.equal(stub.calls, 1);
+});
+
 test('POST /extract: the demo token skips Turnstile only (never the kill switch or the limits)', async () => {
   const env = { ...PROD, AI: fakeAI('{}') };
   const stub = { async extractReserve(a) { this.args = a; return { status: 200 }; } };
@@ -143,6 +153,22 @@ test('extract limits: plan defaults; outside dev vars only tighten; dev may rela
   assert.equal(extractLimitsFrom({ SANDBOX_DEV: '1', EXTRACT_IP_DAY: '999', EXTRACT_IP_INTERVAL_S: '0' }).ipDay, 999);
   assert.equal(extractLimitsFrom({ SANDBOX_DEV: '1', EXTRACT_IP_INTERVAL_S: '0' }).ipIntervalS, 0);
   assert.throws(() => extractLimitsFrom({ EXTRACT_IP_DAY: '-1' }));
+  assert.equal(EXTRACT_LIMITS.ipDay, 5); assert.equal(EXTRACT_LIMITS.globalHour, 40); assert.ok(EXTRACT_LIMITS.pacePct >= 25);
+  assert.equal(extractLimitsFrom({ EXTRACT_GLOBAL_HOUR: '999' }).globalHour, 40);
+  assert.equal(extractLimitsFrom({ EXTRACT_PACE_PCT: '0' }).pacePct, EXTRACT_LIMITS.pacePct);   // outside dev pacing cannot be relaxed
+  assert.equal(extractLimitsFrom({ EXTRACT_PACE_PCT: '80' }).pacePct, 80);
+  assert.equal(extractLimitsFrom({ SANDBOX_DEV: '1', EXTRACT_PACE_PCT: '0' }).pacePct, 0);
+  assert.throws(() => extractLimitsFrom({ EXTRACT_PACE_PCT: '101' }));
+});
+
+test('pacedDayCap: part of the daily budget is released hour by hour (UTC)', () => {
+  const at = (h) => Date.UTC(2026, 10, 26, h, 30);
+  assert.equal(pacedDayCap(300, 50, at(0)), 157);     // 150 at once + 1/24 of the held 150
+  assert.equal(pacedDayCap(300, 50, at(11)), 225);
+  assert.equal(pacedDayCap(300, 50, at(23)), 300);    // the whole budget by the last hour
+  assert.equal(pacedDayCap(300, 0, at(0)), 300);      // positive control: no pacing = the whole budget at once
+  assert.equal(pacedDayCap(24, 100, at(5)), 6);
+  for (let h = 0; h < 23; h++) assert.ok(pacedDayCap(300, 50, at(h)) < 300, 'hour ' + h + ' must keep some budget back');
 });
 
 test('renderExtract: visitor text is escaped in the textarea; samples carry no live attacker address', () => {
@@ -153,6 +179,8 @@ test('renderExtract: visitor text is escaped in the textarea; samples carry no l
   for (const k of ['genuine', 'payee_swap', 'injection', 'lookalike']) assert.ok(sampleText(k, cfg, ACME).length > 40);
   assert.equal(sampleText('nope', cfg, ACME), '');
   assert.match(renderExtract({ cfg, sitekey: 'k', off: true }), /paused/);
+  assert.match(body, /processed by Cloudflare Workers AI/);   // privacy wording: the text leaves this site for the model
+  assert.equal(sampleText('genuine', { ...cfg, addresses: {}, vendors: { ...cfg.vendors, acme: { ...cfg.vendors.acme, wallet: ACME } } }).includes(ACME), true);   // GET fills the sample from the config (no chain read)
 });
 
 test('vendorRegistry: reads each vendor wallet, drops zero wallets, caches 60 s, fails when none', async () => {
@@ -166,4 +194,20 @@ test('vendorRegistry: reads each vendor wallet, drops zero wallets, caches 60 s,
   _resetRegistryCache();
   await assert.rejects(vendorRegistry(cfg, 'http://unused', { readImpl: async () => '0x' + '0'.repeat(40) }));
   _resetRegistryCache();
+});
+
+test('vendorRegistry: a failed read is cached ~30 s (one RPC attempt, not one per request), then retried', async () => {
+  _resetRegistryCache();
+  let n = 0;
+  const down = async () => { n++; throw new Error('rpc down'); };
+  await assert.rejects(vendorRegistry(cfg, 'http://unused', { readImpl: down }));
+  await assert.rejects(vendorRegistry(cfg, 'http://unused', { readImpl: down }));
+  await assert.rejects(vendorRegistry(cfg, 'http://unused', { readImpl: down }));
+  assert.equal(n, 1, 'each request hit the RPC again');
+  const realNow = Date.now;
+  try {
+    Date.now = () => realNow() + 31_000;   // after the failure TTL the next request reads again (positive control)
+    const e = await vendorRegistry(cfg, 'http://unused', { readImpl: async (id) => (id === '1820' ? ACME : A('1')) });
+    assert.equal(e.length, 3);
+  } finally { Date.now = realNow; _resetRegistryCache(); }
 });

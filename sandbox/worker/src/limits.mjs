@@ -42,6 +42,7 @@ export function parseConfig(env) {
   for (const k of ['payrun', 'registry', 'token', 'treasury']) if (!ADDR.test(cfg[k] || '')) throw new Error(`config: ${k}`);
   if (!H32.test(cfg.paidInvoiceHash || '')) throw new Error('config: paidInvoiceHash');
   for (const v of ['acme', 'hijack', 'new']) if (!/^\d{1,9}$/.test(String(cfg.vendors?.[v]?.id ?? '')) || !cfg.vendors[v].name) throw new Error(`config: vendor ${v}`);
+  if (cfg.vendors.acme.wallet !== undefined && !ADDR.test(cfg.vendors.acme.wallet)) throw new Error('config: vendor acme wallet');
   if (cfg.explorer && !/^https:\/\/[a-z0-9.-]+$/.test(cfg.explorer)) throw new Error('config: explorer');
   return { cfg, keys };
 }

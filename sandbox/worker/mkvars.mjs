@@ -37,7 +37,8 @@ const config = {
   explorer: mode === 'fork' ? '' : 'https://explorer-test.qday.info',
   payrun: st.payrun, registry: '0xF45E7f39Caba1d2055f613970575a7e7069636Be', token: '0x456569838f1d43009A91ebA4263147Afd7233483',
   treasury: st.addresses.treasury, treasuryStart: '90000',            // 0.09 tUSD8 after the seed payment (deploy.mjs check)
-  vendors: { acme: { id: st.acme_id, name: st.acme_name }, hijack: { id: st.hijack_id, name: st.hijack_name }, new: { id: st.new_id, name: st.new_name } },
+  // acme.wallet: Acme's registered (public) wallet, so GET /extract fills its genuine sample without a chain read. Not a key.
+  vendors: { acme: { id: st.acme_id, name: st.acme_name, wallet: st.addresses.vendor_acme }, hijack: { id: st.hijack_id, name: st.hijack_name }, new: { id: st.new_id, name: st.new_name } },
   paidInvoiceHash: st.paid_invoice_hash,
   addresses: Object.fromEntries(ROLES.map((r) => [r, st.addresses[r]])),
   maxGasPriceWei: '5000000000', minBalanceWei: '5000000000000000',          // 5 gwei cap; 0.005 tQDAY floor per key (~40 failed stages)

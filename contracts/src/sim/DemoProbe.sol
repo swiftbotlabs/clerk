@@ -4,8 +4,9 @@ pragma solidity ^0.8.24;
 /// @notice NEVER DEPLOYED. The approval page's no-wallet simulation puts this runtime code at the PayRun OWNER's address for a
 /// single eth_call (a state override), so each call below runs with msg.sender == owner, exactly as the owner's own approval
 /// would, and every effect is thrown away when the call returns. No key, no signature, no transaction.
-/// After each call it records what changed: did the call succeed (and its return or revert data), the payee's and the
-/// treasury's token balances, and the run's status.
+/// It first records the payee's and the treasury's token balances BEFORE any call (so "paid X" is exact: same block, same
+/// state), then after each call what changed: did the call succeed (and its return or revert data), both balances again,
+/// and the run's status.
 contract DemoProbe {
     struct Step {
         bool ok;
@@ -17,8 +18,10 @@ contract DemoProbe {
 
     function simulate(address payrun, bytes[] calldata calls, address token, address payee, address treasury, uint256 runId)
         external
-        returns (Step[] memory out)
+        returns (uint256 payeeBefore, uint256 treasuryBefore, Step[] memory out)
     {
+        payeeBefore = _balance(token, payee);
+        treasuryBefore = _balance(token, treasury);
         out = new Step[](calls.length);
         for (uint256 i = 0; i < calls.length; i++) {
             (bool ok, bytes memory ret) = payrun.call(calls[i]);

@@ -46,6 +46,10 @@ const fail = (m) => { console.log('SIM FAIL: ' + m); failed++; };
       const lis = await p.$$eval('#simSteps li', (x) => x.map((e) => e.innerText));
       if (!want[i - 1].test(lis[i - 1] || '')) fail(`step ${i} text: ${JSON.stringify(lis[i - 1])}; note: ${await p.$eval('#simNote', (e) => e.innerText)}`);
       if (!lis.every((t) => /^Simulation\s/.test(t))) fail(`step ${i}: a line is not labelled Simulation`);
+      if (i === 4) {   // B2: the treasury's start balance is the probe's own pre-call read, so start - end is exactly the 0.01 paid
+        const m = /Treasury ([\d.,]+) tUSD8 → ([\d.,]+) tUSD8/.exec(lis[3]); const num = (x) => Math.round(Number(x.replace(/,/g, '')) * 100);
+        if (!m || num(m[1]) - num(m[2]) !== 1) fail(`step 4: treasury change is not exactly 0.01: ${JSON.stringify(lis[3])}`);
+      }
     }
     const note = await p.$eval('#simNote', (e) => e.innerText);
     if (!/nothing was signed or sent/.test(note)) fail('final note does not say nothing was sent: ' + note);
@@ -59,8 +63,10 @@ const fail = (m) => { console.log('SIM FAIL: ' + m); failed++; };
       await p.waitForFunction((k) => /What the live contract says|Could not run/.test(document.querySelector('#tx-' + k)?.innerText || ''), s.key, { timeout: 90_000 }).catch(() => {});
       const t = await p.$eval('#tx-' + s.key, (e) => e.innerText);
       if (!/^Simulation\s/.test(t) || !/nothing was signed or sent/.test(t)) fail(`run ${s.key}: result not labelled: ${t}`);
-      if (s.kind === 'held' && !/not paid, the hold blocks it[\s\S]*Confirm the payee: accepted[\s\S]*Approve and pay: paid/.test(t)) fail(`held run ${s.key}: ${t}`);
+      if (s.kind === 'held' && !/not paid, the hold blocks it[\s\S]*Confirm the payee, only after you've checked the vendor[^:]*: accepted[\s\S]*Approve and pay: paid/.test(t)) fail(`held run ${s.key}: ${t}`);
       if (s.kind === 'pay' && !/Approve and pay: paid .* to .*registered wallet/.test(t)) fail(`payable run ${s.key}: ${t}`);
+      const pm = /Approve and pay: paid ([\d.,]+) tUSD8/.exec(t);   // B2: "paid X" = probe's pre-call balance vs after; never 0
+      if (pm && !(Number(pm[1].replace(/,/g, '')) > 0)) fail(`run ${s.key}: paid amount is not positive: ${pm[1]}`);
       console.log(`run ${s.key} (${s.kind}): ${t.replace(/\s+/g, ' ').slice(0, 220)}`);
     }
 

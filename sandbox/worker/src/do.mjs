@@ -5,7 +5,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { parseAbi } from 'viem';
 import { makeSandbox, KINDS, SandboxError, ERC20_ABI, jsonSafe } from '../../lib/sandbox.mjs';
 import { limitsFrom, parseConfig, dayStart } from './limits.mjs';
-import { extractLimitsFrom } from './extract.mjs';
+import { extractLimitsFrom, pacedDayCap } from './extract.mjs';
 
 const KEEP = 100;
 const HEALTH_TTL_MS = 30_000;
@@ -124,6 +124,9 @@ export class Sandbox extends DurableObject {
     const ipH = await this.ipHash('x|' + ip), netH = net ? await this.ipHash('x|' + net) : '';
     const g = this.sql.exec('SELECT COUNT(*) AS n FROM xhits WHERE ts >= ? AND ip != ?', ds, DEMO).one().n;
     if (g >= L.globalDay) return { status: 429, code: 'x_global_day', retryAfter: day() };
+    const gh = this.sql.exec('SELECT COUNT(*) AS n, MIN(ts) AS first FROM xhits WHERE ts >= ? AND ip != ?', now - 3_600_000, DEMO).one();
+    if (gh.n >= L.globalHour) return { status: 429, code: 'x_global_hour', retryAfter: Math.max(1, Math.ceil((gh.first + 3_600_000 - now) / 1000)) };
+    if (g >= pacedDayCap(L.globalDay, L.pacePct, now)) return { status: 429, code: 'x_global_hour', retryAfter: Math.max(1, Math.ceil((3_600_000 - (now % 3_600_000)) / 1000)) };
     if (netH) {
       const nh = this.sql.exec('SELECT COUNT(*) AS n, MIN(ts) AS first FROM xhits WHERE net = ? AND ts >= ?', netH, now - 3_600_000).one();
       if (nh.n >= L.net48Hour) return { status: 429, code: 'x_net_hour', retryAfter: Math.max(1, Math.ceil((nh.first + 3_600_000 - now) / 1000)) };

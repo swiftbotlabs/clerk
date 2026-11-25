@@ -4,7 +4,8 @@
 // The model: Cloudflare Workers AI (free allocation), no tools, no keys, no secrets in its prompt, temperature 0. Its reply is
 // untrusted: only six short string fields are kept, everything else is dropped, and every value is escaped on the page. If the
 // model is unavailable (no binding, quota, timeout, bad reply) the deterministic extractor proposes the line instead, and the
-// page says so. This route NEVER sends a transaction and stores no visitor text (only salted visitor hashes for rate limits).
+// page says so. This route NEVER sends a transaction and stores no visitor text (only salted visitor hashes for rate limits);
+// the text goes to Cloudflare Workers AI for the proposal, and the page says so.
 import { createPublicClient, http } from 'viem';
 import { checkLine, extractRules } from '../../lib/check.mjs';
 import { SAMPLE_INVOICES, REGISTRY_ABI } from '../../lib/sandbox.mjs';
@@ -23,7 +24,10 @@ export const SYSTEM_PROMPT = 'You read one supplier invoice and propose one paym
 
 // Visitor limits for /extract (separate from the attack limits; it sends nothing, but the model has a daily free allocation:
 // 300 calls x ~25 neurons stays well under Workers AI's 10,000 free neurons a day). Vars can only tighten them outside dev.
-export const EXTRACT_LIMITS = Object.freeze({ ipIntervalS: 10, ipDay: 20, globalDay: 300, net48Hour: 30, demoDay: 40 });
+//   ipDay 5 per visitor; globalHour 40 for everyone; pacePct: this share of globalDay is released hour by hour over the UTC day
+//   (pacedDayCap), so a burst early in the day cannot use up the whole allocation.
+export const EXTRACT_LIMITS = Object.freeze({ ipIntervalS: 10, ipDay: 5, globalDay: 300, globalHour: 40, net48Hour: 30, demoDay: 40, pacePct: 50 });
+const LARGER_IS_TIGHTER = new Set(['ipIntervalS', 'pacePct']);
 export function extractLimitsFrom(env = {}) {
   const dev = env.SANDBOX_DEV === '1';
   const out = {};
@@ -32,9 +36,16 @@ export function extractLimitsFrom(env = {}) {
     if (v === undefined || v === null || v === '') { out[k] = def; continue; }
     if (!/^\d{1,7}$/.test(String(v))) throw new Error('bad extract limit var');
     const n = Number(v);
-    out[k] = dev ? n : k === 'ipIntervalS' ? Math.max(n, def) : Math.min(n, def);
+    if (k === 'pacePct' && n > 100) throw new Error('bad extract limit var');
+    out[k] = dev ? n : LARGER_IS_TIGHTER.has(k) ? Math.max(n, def) : Math.min(n, def);
   }
   return out;
+}
+/** How many of today's globalDay tries may be used by `now`: (100 - pacePct)% at once, the rest released evenly per UTC hour. */
+export function pacedDayCap(globalDay, pacePct, now = Date.now()) {
+  const held = (globalDay * pacePct) / 100;
+  const hour = new Date(now).getUTCHours();
+  return Math.min(globalDay, Math.ceil(globalDay - held + (held * (hour + 1)) / 24));
 }
 
 const CTRL = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g;
@@ -78,29 +89,38 @@ export async function proposeLine(env, text, { timeoutMs = MODEL_TIMEOUT_MS } = 
   } finally { clearTimeout(timer); }
 }
 
-// The sandbox's registered vendors (name -> wallet) read from the ERC-8004 registry; cached 60 s per isolate.
-let regCache = null;
+// The sandbox's registered vendors (name -> wallet) read from the ERC-8004 registry; cached 60 s per isolate. A failed read is
+// cached too (30 s), so a chain outage costs one RPC attempt per isolate per 30 s, not one per request.
+export const REG_TTL_MS = 60_000, REG_FAIL_TTL_MS = 30_000;
+let regCache = null, regFail = null;
 export async function vendorRegistry(cfg, rpc, { readImpl } = {}) {
-  if (regCache && Date.now() - regCache.t < 60_000 && regCache.key === cfg.registry) return regCache.entries;
-  const pub = readImpl ? null : createPublicClient({ transport: http(rpc, { timeout: 8_000, retryCount: 1 }) });
-  const read = readImpl || ((id) => pub.readContract({ address: cfg.registry, abi: REGISTRY_ABI, functionName: 'getAgentWallet', args: [BigInt(id)] }));
-  const entries = [];
-  for (const v of ['acme', 'hijack', 'new']) {
-    const w = await read(cfg.vendors[v].id);
-    if (/^0x[0-9a-fA-F]{40}$/.test(String(w)) && BigInt(w) !== 0n) entries.push([cfg.vendors[v].name, w]);
+  const now = Date.now();
+  if (regCache && now - regCache.t < REG_TTL_MS && regCache.key === cfg.registry) return regCache.entries;
+  if (regFail && now - regFail.t < REG_FAIL_TTL_MS && regFail.key === cfg.registry) throw new Error('registry unavailable (cached)');
+  try {
+    const pub = readImpl ? null : createPublicClient({ transport: http(rpc, { timeout: 8_000, retryCount: 1 }) });
+    const read = readImpl || ((id) => pub.readContract({ address: cfg.registry, abi: REGISTRY_ABI, functionName: 'getAgentWallet', args: [BigInt(id)] }));
+    const entries = [];
+    for (const v of ['acme', 'hijack', 'new']) {
+      const w = await read(cfg.vendors[v].id);
+      if (/^0x[0-9a-fA-F]{40}$/.test(String(w)) && BigInt(w) !== 0n) entries.push([cfg.vendors[v].name, w]);
+    }
+    if (!entries.length) throw new Error('no vendor wallets');
+    regCache = { t: Date.now(), key: cfg.registry, entries }; regFail = null;
+    return entries;
+  } catch (e) {
+    regFail = { t: Date.now(), key: cfg.registry };
+    throw e;
   }
-  if (!entries.length) throw new Error('no vendor wallets');
-  regCache = { t: Date.now(), key: cfg.registry, entries };
-  return entries;
 }
-export const _resetRegistryCache = () => { regCache = null; };
+export const _resetRegistryCache = () => { regCache = null; regFail = null; };
 
 const EXAMPLE_ATTACKER = '0x5eA7fF0e3B2d1c4A8b9E6f7D0c1B2a3E4f5D6c7B';
 export const SAMPLES = ['genuine', 'payee_swap', 'injection', 'lookalike'];
 const SAMPLE_LABEL = { genuine: 'Genuine invoice', payee_swap: '"New bank details"', injection: 'Prompt injection', lookalike: 'Look-alike vendor' };
 export function sampleText(kind, cfg, acmeWallet) {
   if (!SAMPLES.includes(kind)) return '';
-  const v = { acme: { name: cfg.vendors.acme.name, wallet: acmeWallet || cfg.addresses?.vendor_acme || EXAMPLE_ATTACKER } };
+  const v = { acme: { name: cfg.vendors.acme.name, wallet: acmeWallet || cfg.vendors.acme.wallet || cfg.addresses?.vendor_acme || EXAMPLE_ATTACKER } };
   return SAMPLE_INVOICES[kind](v).replaceAll('{ATTACKER}', EXAMPLE_ATTACKER).replaceAll('{N}', '4821');
 }
 
@@ -134,7 +154,7 @@ ${proposal.reply ? `<details><summary>The model's raw reply</summary><pre>${esc(
   }
   const form = off ? '<div class="banner"><strong>The extractor demo is paused.</strong> The sandbox page and its log stay up.</div>'
     : `<form method="post" action="/extract">
-<p class="muted" style="margin:0 0 8px;font-size:15px">Paste an invoice (plain text, up to ${MAX_TEXT} characters) or load a sample: ${sampleLinks}. Your text is not stored or logged.</p>
+<p class="muted" style="margin:0 0 8px;font-size:15px">Paste an invoice (plain text, up to ${MAX_TEXT} characters) or load a sample: ${sampleLinks}. Your text is processed by Cloudflare Workers AI to propose the line; this site does not store or log it.</p>
 <textarea name="text" maxlength="${MAX_TEXT}" required>${esc(text)}</textarea>
 <div class="go"><div class="cf-turnstile" data-sitekey="${esc(sitekey)}" data-action="extract"></div><button type="submit">Propose a line and check it</button></div>
 <noscript><p class="muted">The human check needs JavaScript.</p></noscript></form>
@@ -170,10 +190,11 @@ export async function handleExtract(req, env, { stub, cfg, html, refuse, registr
   const auth = req.headers.get('authorization') || '';
   const demo = auth.startsWith('Bearer ') ? await demoOk(env, auth.slice(7)) : false;
   if (!demo && !(await turnstileOk(env, p.get('cf-turnstile-response'), ip, fetch, 'extract'))) return refuse('turnstile', 403);
-  const r = await stub.extractReserve({ ip: key, net: net48Key(ip), demo });
-  if (r.status !== 200) return refuse(r.code, r.status, { retryAfter: r.retryAfter });
+  // the registry is read BEFORE the try is counted: a chain outage must not use up the visitor's tries
   let entries;
   try { entries = await registry(cfg); } catch { return refuse('chain', 503); }
+  const r = await stub.extractReserve({ ip: key, net: net48Key(ip), demo });
+  if (r.status !== 200) return refuse(r.code, r.status, { retryAfter: r.retryAfter });
   const proposal = await proposeLine(env, text);
   const verdict = checkLine(text, proposal.line, entries);
   console.log(JSON.stringify({ ev: 'extract', source: proposal.source, decision: verdict.decision }));   // no visitor text, no IP

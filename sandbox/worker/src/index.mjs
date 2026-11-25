@@ -47,6 +47,7 @@ const MESSAGES = {
   x_global_day: ['Daily limit reached', 'The extractor demo has used today\'s model allocation for everyone. Come back tomorrow (UTC).'],
   x_net_hour: ['Busy network', 'Your network block has used this hour\'s tries. Try again later this hour.'],
   x_demo_day: ['Demo budget used', 'The demo budget for today is used up.'],
+  x_global_hour: ['Busy hour', 'The extractor demo has used this hour\'s share of tries for everyone (the daily allowance is spread over the day). Try again later.'],
 };
 
 function refuse(code, status, wantsJson, { retryAfter, cfg } = {}) {
@@ -142,7 +143,10 @@ export default {
     if (url.pathname === '/extract') {
       let xl; try { xl = extractLimitsFrom(env); } catch { return html(renderMessage('Not configured', 'Bad limit settings.'), 503); }
       const k = url.searchParams.get('sample') || 'payee_swap';
-      let acme = null; try { acme = (await vendorRegistry(cfg, parseConfig(env).cfg.rpc)).find(([n]) => n === cfg.vendors.acme.name)?.[1] || null; } catch {}
+      // the sample's wallet comes from the deploy config (vendors.acme.wallet, written by mkvars), not a chain read. Only an older
+      // config without it falls back to the registry read (cached 60 s, failures cached 30 s).
+      let acme = cfg.vendors?.acme?.wallet || null;
+      if (!acme) { try { acme = (await vendorRegistry(cfg, parseConfig(env).cfg.rpc)).find(([n]) => n === cfg.vendors.acme.name)?.[1] || null; } catch {} }
       return html(renderExtract({ cfg, sitekey: env.TURNSTILE_SITEKEY || '', text: sampleText(k, cfg, acme), off: env.SANDBOX_OFF === '1' || env.EXTRACT_OFF === '1', limits: xl }));
     }
     if (url.pathname === '/') return cachedPage('/', async () => renderHome({ state: await stub.state({ limit: 25 }), cfg, sitekey: env.TURNSTILE_SITEKEY || '', limits }));
