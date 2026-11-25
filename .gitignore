@@ -10,3 +10,5 @@ e2e/video/out/
 e2e/video/out/
 e2e/video/shots/
 DEMO.md
+sandbox/node_modules/
+sandbox/work/
