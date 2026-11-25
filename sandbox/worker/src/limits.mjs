@@ -1,5 +1,5 @@
 // Rate limits and config parsing, kept free of Worker/viem imports so node --test can check them directly.
-export const DEFAULT_LIMITS = Object.freeze({ ipIntervalS: 60, ipDay: 30, globalDay: 300, globalHour: 30, demoDay: 40, maxQueue: 4 });
+export const DEFAULT_LIMITS = Object.freeze({ ipIntervalS: 60, ipDay: 30, globalDay: 300, globalHour: 30, net48Hour: 10, demoDay: 40, maxQueue: 4 });
 export const MAX_TEXT = 4096;           // invoice text, characters
 export const MAX_BODY = 8192;           // request body, bytes
 export const MAX_TOKEN = 2048;          // Turnstile token, characters
@@ -23,7 +23,7 @@ export function limitsFrom(env = {}) {
     return dev ? n : Math.max(n, DEFAULT_LIMITS.ipIntervalS);
   })();
   return { ipIntervalS, ipDay: pick(env.LIMIT_IP_DAY, DEFAULT_LIMITS.ipDay), globalDay: pick(env.LIMIT_GLOBAL_DAY, DEFAULT_LIMITS.globalDay),
-    globalHour: pick(env.LIMIT_GLOBAL_HOUR, DEFAULT_LIMITS.globalHour), demoDay: pick(env.LIMIT_DEMO_DAY, DEFAULT_LIMITS.demoDay),
+    globalHour: pick(env.LIMIT_GLOBAL_HOUR, DEFAULT_LIMITS.globalHour), net48Hour: pick(env.LIMIT_NET48_HOUR, DEFAULT_LIMITS.net48Hour), demoDay: pick(env.LIMIT_DEMO_DAY, DEFAULT_LIMITS.demoDay),
     maxQueue: pick(env.LIMIT_QUEUE, DEFAULT_LIMITS.maxQueue, { devMin: 1 }) || 1 };
 }
 
@@ -48,17 +48,28 @@ export function parseConfig(env) {
 
 export const dayStart = (ms) => ms - (ms % 86_400_000);
 
+function v6groups(ip) {
+  if (!/^[0-9a-f:.]{2,45}$/.test(ip) || ip.split('::').length > 2) return null;
+  const [head, tail = ''] = ip.split('::');
+  const h = head ? head.split(':') : [], t = tail ? tail.split(':') : [];
+  const full = ip.includes('::') ? [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t] : h;
+  return full.length < 4 ? null : full.map((x) => (parseInt(x || '0', 16) || 0).toString(16));
+}
+
 /** F4: the rate-limit key of a client IP. IPv4 as is; IPv6 grouped by its /64 (one home or VPS block = one visitor). */
 export function ipKey(ip) {
   ip = String(ip || '').trim().toLowerCase();
   if (!ip.includes(':')) return /^\d{1,3}(\.\d{1,3}){3}$/.test(ip) ? ip : '';
-  if (!/^[0-9a-f:.]{2,45}$/.test(ip)) return '';
-  const [head, tail = ''] = ip.split('::');
-  if (ip.split('::').length > 2) return '';
-  const h = head ? head.split(':') : [], t = tail ? tail.split(':') : [];
-  const full = ip.includes('::') ? [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t] : h;
-  if (full.length < 4) return '';
-  return full.slice(0, 4).map((x) => (parseInt(x || '0', 16) || 0).toString(16)).join(':') + '::/64';
+  const g = v6groups(ip);
+  return g ? g.slice(0, 4).join(':') + '::/64' : '';
+}
+
+/** R2-1: the IPv6 /48 a client is in (a tunnel-broker allocation holds 65,536 /64s); '' for IPv4 / invalid. */
+export function net48Key(ip) {
+  ip = String(ip || '').trim().toLowerCase();
+  if (!ip.includes(':')) return '';
+  const g = v6groups(ip);
+  return g ? g.slice(0, 3).join(':') + '::/48' : '';
 }
 
 const TEST_KEY = /^[123]x0{20,}[A-Za-z]{2}$/;
@@ -79,8 +90,14 @@ export async function turnstileOk(env, token, ip, fetchImpl = fetch) {
   const form = new FormData();
   form.append('secret', env.TURNSTILE_SECRET); form.append('response', token); form.append('remoteip', ip);
   try {
-    const r = await fetchImpl('https://challenges.cloudflare.com/turnstile/v0/siteverify', { method: 'POST', body: form, signal: AbortSignal.timeout(8000) });
-    if (!r.ok) return false;
+    // one retry on a network error or a 5xx (a token is single-use, so a retry after a lost answer fails closed)
+    let r;
+    for (let i = 0; i < 2; i++) {
+      try { r = await fetchImpl('https://challenges.cloudflare.com/turnstile/v0/siteverify', { method: 'POST', body: form, signal: AbortSignal.timeout(8000) }); }
+      catch { r = null; }
+      if (r && r.status < 500) break;
+    }
+    if (!r || !r.ok) { console.log(JSON.stringify({ ev: 'siteverify_failed', status: r ? r.status : 'network' })); return false; }
     const d = await r.json();
     if (d.success !== true) return false;
     const devTest = env.SANDBOX_DEV === '1' && TEST_KEY.test(env.TURNSTILE_SECRET);

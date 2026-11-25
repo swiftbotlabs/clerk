@@ -6,7 +6,7 @@
 // (kill switch again, rate limits, one-at-a-time queue, chain sends). No CORS headers are ever sent.
 import { KINDS } from '../../lib/sandbox.mjs';
 import { renderHome, renderAttempt, renderLog, renderMessage } from './page.mjs';
-import { limitsFrom, MAX_BODY, MAX_TEXT, ipKey, turnstileOk, turnstileConfigError, demoOk, publicConfigFrom } from './limits.mjs';
+import { limitsFrom, MAX_BODY, MAX_TEXT, ipKey, net48Key, turnstileOk, turnstileConfigError, demoOk, publicConfigFrom } from './limits.mjs';
 export { Sandbox } from './do.mjs';
 
 const CSP = "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; " +
@@ -33,6 +33,7 @@ const MESSAGES = {
   tsconfig: ['Not configured', 'The human check is not configured, so attacks are off.'],
   global_hour: ['Busy hour', 'The sandbox has run this hour\'s attempts for everyone. Try again later this hour.'],
   demo_day: ['Demo budget used', 'The demo budget for today is used up.'],
+  net_hour: ['Busy network', 'Your network block has used this hour\'s attempts. Try again later this hour.'],
   rate: ['Slow down', 'Too many requests from your network. Wait a minute.'],
   text: ['Too long', `The invoice text can be at most ${MAX_TEXT} characters.`],
 };
@@ -92,11 +93,14 @@ async function attack(req, env, stub, cfg) {
   const ip = req.headers.get('cf-connecting-ip') || '';
   const key = ipKey(ip);
   if (!key) return refuse('ip', 400, wantsJson, { cfg });
-  // F4: a reserved demo budget behind a secret header (constant-time check); it replaces the human check, not the kill switch
-  const demo = await demoOk(env, req.headers.get('x-sandbox-demo'));
+  // F4/R2-3: a reserved demo budget behind `Authorization: Bearer <DEMO_TOKEN>` (constant-time check; invocation logs are off
+  // in wrangler.toml so no request header is logged). It replaces the human check, not the kill switch or the queue.
+  const auth = req.headers.get('authorization') || '';
+  const demo = auth.startsWith('Bearer ') ? await demoOk(env, auth.slice(7)) : false;
   if (!demo && !(await turnstileOk(env, fields.token, ip))) return refuse('turnstile', 403, wantsJson, { cfg });
-  const r = await stub.attack({ kind, text, ip: key, demo });
+  const r = await stub.attack({ kind, text, ip: key, net: net48Key(ip), demo });
   if (r.status !== 200) return refuse(r.code, r.status, wantsJson, { retryAfter: r.retryAfter, cfg });
+  pageCache.clear();     // this isolate's cached views now lag the log: drop them
   if (wantsJson) return json({ ok: true, id: r.id, attempt: r.rec, detail: r.detail });
   return html(renderAttempt({ rec: r.rec, detail: r.detail, cfg, fresh: true }));
 }
@@ -104,14 +108,15 @@ async function attack(req, env, stub, cfg) {
 // F3: / and /log are rendered at most once per 5 s per isolate (the Cache API is a no-op on workers.dev, isolate memory is not)
 const PAGE_TTL_MS = 5_000;
 const pageCache = new Map();
-async function cachedPage(path, render) {
+async function cachedPage(path, render, make = html) {
   const hit = pageCache.get(path);
   const now = Date.now();
-  if (hit && now - hit.t < PAGE_TTL_MS) return html(hit.body, 200, { 'x-rendered-at': String(hit.t), 'cache-control': 'public, max-age=5' });
+  if (hit && now - hit.t < PAGE_TTL_MS) return make(hit.body, 200, { 'x-rendered-at': String(hit.t), 'cache-control': 'public, max-age=5' });
   const body = await render();
   pageCache.set(path, { t: now, body });
-  return html(body, 200, { 'x-rendered-at': String(now), 'cache-control': 'public, max-age=5' });
+  return make(body, 200, { 'x-rendered-at': String(now), 'cache-control': 'public, max-age=5' });
 }
+const jsonRaw = (body, status, extra) => new Response(body, { status, headers: { ...BASE_HEADERS, 'content-type': 'application/json', ...extra } });
 
 export default {
   async fetch(req, env) {
@@ -139,7 +144,8 @@ export default {
     try { limits = limitsFrom(env); } catch { return html(renderMessage('Not configured', 'Bad limit settings.'), 503); }
     if (url.pathname === '/') return cachedPage('/', async () => renderHome({ state: await stub.state({ limit: 25 }), cfg, sitekey: env.TURNSTILE_SITEKEY || '', limits }));
     if (url.pathname === '/log') return cachedPage('/log', async () => renderLog({ state: await stub.state({ limit: 100 }), cfg }));
-    if (url.pathname === '/api/state') return json({ ...(await stub.state({ limit: 100 })), config: cfg });
+    // R2-2: /api/state shares the 5 s cache (dropped by this isolate after each finished attack)
+    if (url.pathname === '/api/state') return cachedPage('/api/state', async () => JSON.stringify({ ...(await stub.state({ limit: 100 })), config: cfg }), jsonRaw);
     const m = /^\/attempt\/(\d{1,9})$/.exec(url.pathname);
     if (m) {
       const rec = await stub.attempt(Number(m[1]));

@@ -4,14 +4,17 @@
 # Usage: worker/scripts/controls.sh            (log: work/controls.log)
 set -uo pipefail
 cd "$(dirname "$0")/../.."
-LOG=work/controls.log; : > "$LOG"
-SRC="worker/src/index.mjs worker/src/do.mjs worker/src/limits.mjs worker/src/page.mjs worker/mkvars.mjs lib/sandbox.mjs"
+# R2-4: a partial run (ONLY=a,b) writes its own log, so work/controls.log always holds the last FULL run
+if [ -n "${ONLY:-}" ]; then LOG=work/controls-partial.log; else LOG=work/controls.log; fi
+: > "$LOG"; echo "run $(date -u +%Y-%m-%dT%H:%MZ) ONLY=${ONLY:-<all>}" >> "$LOG"
+SRC="watch_paid.mjs worker/src/index.mjs worker/src/do.mjs worker/src/limits.mjs worker/src/page.mjs worker/mkvars.mjs lib/sandbox.mjs"
 sha() { sha256sum $SRC | sha256sum | cut -c1-16; }
 ORIG=$(sha); mkdir -p work/controls-bak; for f in $SRC; do cp "$f" "work/controls-bak/$(basename "$f")"; done
 restore() { for f in $SRC; do cp "work/controls-bak/$(basename "$f")" "$f"; done; }
 trap restore EXIT
 run() {   # phases "U" = unit tests only
   if [ "$1" = U ]; then node --test test/worker.unit.test.mjs > work/controls-run.log 2>&1; return; fi
+  if [ "$1" = W ]; then SANDBOX_FORK=1 timeout 600 node --test test/watch_paid.fork.test.mjs > work/controls-run.log 2>&1; return; fi
   SANDBOX_WORKER=1 SKIP_TRIM=1 PHASES=$1 timeout 1200 node --test --test-concurrency=1 test/worker.http.test.mjs > work/controls-run.log 2>&1; }
 fails=0
 mutant() {   # name phases [file old new]...
@@ -58,12 +61,21 @@ mutant F7_symlink_check_off U worker/mkvars.mjs "if (lstatSync(out).isSymbolicLi
 mutant F8_no_recovery 7 worker/src/do.mjs "    this.recoverInterrupted();
   }" "  }"
 mutant F8_no_running_row 7 worker/src/do.mjs "at, kind, 'running'," "at, kind, 'refused',"
+# --- review round 2
+mutant R2_1_net48_cap_off 3 worker/src/do.mjs "if (nh.n >= L.net48Hour)" "if (false)"
+mutant R2_2_state_cache_off 1 worker/src/index.mjs "if (url.pathname === '/api/state') return cachedPage('/api/state', async () => JSON.stringify({ ...(await stub.state({ limit: 100 })), config: cfg }), jsonRaw);" "if (url.pathname === '/api/state') return json({ ...(await stub.state({ limit: 100 })), config: cfg });"
+mutant R2_2_no_invalidation 1 worker/src/index.mjs "  pageCache.clear();     // this" "  // pageCache.clear();     // this"
+# --- Paid watcher (condition 5) + the Paid ABI it uncovered (payeeAgentId is indexed in PayRunV2)
+mutant W_watcher_abi_wrong W watch_paid.mjs "bytes32 invoiceRef, uint256 indexed agentId, address payee" "bytes32 invoiceRef, uint256 agentId, address payee"
+mutant W_lib_abi_wrong W lib/sandbox.mjs "bytes32 invoiceRef, uint256 indexed agentId, address payee" "bytes32 invoiceRef, uint256 agentId, address payee"
+mutant W_failed_read_is_ok W watch_paid.mjs "rc = 1; stateNow = 'ERROR'; fails++;" "rc = 0; stateNow = 'OK'; fails++;"
+mutant W_seed_filter_too_wide W watch_paid.mjs "if (l.args.runId === BigInt(st.seed_run)) continue;" "continue;"
 # --- missing controls named in r1
 mutant origin_check_off 1 worker/src/index.mjs "if (origin !== null && origin !== url.origin)" "if (false)"
 mutant body_cap_off 1 worker/src/index.mjs "if (n > max) { try { await reader.cancel(); } catch {} return null; }" "" worker/src/index.mjs "if (cl > max) return null;" ""
 restore
 [ "$(sha)" = "$ORIG" ] || { echo "RESTORE FAILED: sha differs" | tee -a "$LOG"; exit 2; }
-if run 1,2,3,4,5,6,7,8 && run U; then echo "RESTORED: HTTP phases 1-8 + unit GREEN (unit $(grep -m1 -E '^# pass' work/controls-run.log)), source sha $ORIG" | tee -a "$LOG"
+if run 1,2,3,4,5,6,7,8 && run U && run W; then echo "RESTORED: HTTP phases 1-8 + unit + watcher GREEN, source sha $ORIG" | tee -a "$LOG"
 else echo "RESTORED but NOT green" | tee -a "$LOG"; fails=$((fails+1)); fi
 echo "controls done: $fails problem(s)" | tee -a "$LOG"
 exit $(( fails > 0 ))

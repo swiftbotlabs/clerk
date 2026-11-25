@@ -24,6 +24,9 @@ export class Sandbox extends DurableObject {
       CREATE INDEX IF NOT EXISTS hits_ip ON hits(ip, ts);
       CREATE INDEX IF NOT EXISTS hits_ts ON hits(ts);
       CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);`);
+    // R2-1: hits carry the salted hash of the visitor's IPv6 /48 ('' for IPv4)
+    if (!this.sql.exec('PRAGMA table_info(hits)').toArray().some((c) => c.name === 'net')) this.sql.exec("ALTER TABLE hits ADD COLUMN net TEXT NOT NULL DEFAULT ''");
+    this.sql.exec('CREATE INDEX IF NOT EXISTS hits_net ON hits(net, ts)');
     this.tail = Promise.resolve();
     this.queued = 0;
     this.sb = null;
@@ -75,7 +78,7 @@ export class Sandbox extends DurableObject {
 
   /** Synchronous check-and-reserve: SQLite calls are synchronous inside a DO, so two requests cannot both take the last slot.
    *  Demo requests (secret header, checked in the Worker) use their own daily budget and are left out of the public caps. */
-  reserve(ipH, now, L, demo) {
+  reserve(ipH, netH, now, L, demo) {
     const ds = dayStart(now);
     if (this.queued >= L.maxQueue) return { ok: false, code: 'busy', retryAfter: 30 };
     if (demo) {
@@ -88,25 +91,29 @@ export class Sandbox extends DurableObject {
     if (g >= L.globalDay) return { ok: false, code: 'global_day', retryAfter: Math.ceil((ds + 86_400_000 - now) / 1000) };
     const hr = this.sql.exec('SELECT COUNT(*) AS n, MIN(ts) AS first FROM hits WHERE ts >= ? AND ip != ?', now - 3_600_000, DEMO).one();
     if (hr.n >= L.globalHour) return { ok: false, code: 'global_hour', retryAfter: Math.max(1, Math.ceil((hr.first + 3_600_000 - now) / 1000)) };
+    if (netH) {
+      const nh = this.sql.exec('SELECT COUNT(*) AS n, MIN(ts) AS first FROM hits WHERE net = ? AND ts >= ?', netH, now - 3_600_000).one();
+      if (nh.n >= L.net48Hour) return { ok: false, code: 'net_hour', retryAfter: Math.max(1, Math.ceil((nh.first + 3_600_000 - now) / 1000)) };
+    }
     const mine = this.sql.exec('SELECT MAX(ts) AS last FROM hits WHERE ip = ? AND ts >= ?', ipH, now - 86_400_000 * 2).one();
     const today = this.sql.exec('SELECT COUNT(*) AS n FROM hits WHERE ip = ? AND ts >= ?', ipH, ds).one().n;
     if (today >= L.ipDay) return { ok: false, code: 'ip_day', retryAfter: Math.ceil((ds + 86_400_000 - now) / 1000) };
     if (mine.last !== null && now - mine.last < L.ipIntervalS * 1000) return { ok: false, code: 'ip_interval', retryAfter: Math.ceil((mine.last + L.ipIntervalS * 1000 - now) / 1000) };
-    this.sql.exec('INSERT INTO hits (ip, ts) VALUES (?, ?)', ipH, now);
+    this.sql.exec('INSERT INTO hits (ip, ts, net) VALUES (?, ?, ?)', ipH, now, netH);
     this.sql.exec('DELETE FROM hits WHERE ts < ?', now - 86_400_000 * 2);
     return { ok: true };
   }
 
   /** RPC from the Worker. Input already validated there (kind whitelist, text size, Turnstile or demo); validated again here.
    *  `ip` is the visitor KEY (IPv4 or IPv6 /64), already grouped by the Worker. */
-  async attack({ kind, text, ip, demo = false }) {
+  async attack({ kind, text, ip, net = '', demo = false }) {
     if (this.env.SANDBOX_OFF === '1') return { status: 503, code: 'off' };
     if (!Object.hasOwn(KINDS, kind)) return { status: 400, code: 'kind' };
-    if (typeof ip !== 'string' || !ip || ip.length > 64) return { status: 400, code: 'ip' };
+    if (typeof ip !== 'string' || !ip || ip.length > 64 || typeof net !== 'string' || net.length > 64) return { status: 400, code: 'ip' };
     if (text !== undefined && (typeof text !== 'string' || text.length > 4096)) return { status: 413, code: 'text' };
     if (!KINDS[kind].invoice) text = undefined;
     const L = limitsFrom(this.env);
-    const r = this.reserve(await this.ipHash(ip), Date.now(), L, demo === true);
+    const r = this.reserve(await this.ipHash(ip), net ? await this.ipHash(net) : '', Date.now(), L, demo === true);
     if (!r.ok) return { status: r.code === 'busy' ? 503 : 429, code: r.code, retryAfter: r.retryAfter };
     this.queued++;
     const job = this.tail.then(() => this.run(kind, text));
@@ -138,22 +145,33 @@ export class Sandbox extends DurableObject {
       console.log(JSON.stringify({ ev: 'attack_error', kind, resting, name: e?.name, msg }));
       res = { kind, n: K.n, title: K.title, expect: K.expect, steps: [], note: resting ? msg : 'the sandbox hit an error; nothing was paid' };
     }
-    // PUBLIC record: no visitor text, no reasons quoting it; only our step data (role names, tx hashes, decoded errors).
-    const rec = {
-      kind, n: res.n, title: res.title, expect: res.expect, outcome, at: new Date(at).toISOString(), note: res.note || null,
-      steps: (res.steps || []).map((s) => ({ step: s.step, from: s.from, sent: !!s.sent, hash: s.hash || null, status: s.status || null,
-        error: s.error || null, errorArgs: (s.errorArgs || []).slice(0, 6).map((a) => String(a).slice(0, 80)), simulated: s.simulated || null,
-        block: s.block || null, gasUsed: s.gasUsed || null, note: s.note || null })),
-      offchain: res.offchain ? { decision: res.offchain.decision, cop: res.offchain.cop, replacedAddress: !!res.offchain.replacedAddress } : null,
-    };
-    const txs = rec.steps.filter((s) => s.sent).length;
-    this.sql.exec('UPDATE attempts SET outcome = ?, rec = ? WHERE id = ?', outcome, JSON.stringify(rec), id);
-    this.sql.exec('DELETE FROM attempts WHERE id <= ?', id - KEEP);
-    this.count(kind, outcome, txs);
-    console.log(JSON.stringify({ ev: 'attempt', id, kind, outcome, txs }));
-    // PRIVATE detail for the visitor who asked (returned once, never stored): off-chain verdict with reasons.
-    if (res.offchain) detail = { reasons: res.offchain.reasons || [], warnings: res.offchain.warnings || [], proposed: res.offchain.proposed || {} };
-    return { status: 200, id, rec: { id, ...rec }, detail };
+    try {
+      // PUBLIC record: no visitor text, no reasons quoting it; only our step data (role names, tx hashes, decoded errors).
+      const rec = {
+        kind, n: res.n, title: res.title, expect: res.expect, outcome, at: new Date(at).toISOString(), note: res.note || null,
+        steps: (res.steps || []).map((s) => ({ step: s.step, from: s.from, sent: !!s.sent, hash: s.hash || null, status: s.status || null,
+          error: s.error || null, errorArgs: (s.errorArgs || []).slice(0, 6).map((a) => String(a).slice(0, 80)), simulated: s.simulated || null,
+          block: s.block || null, gasUsed: s.gasUsed || null, note: s.note || null })),
+        offchain: res.offchain ? { decision: res.offchain.decision, cop: res.offchain.cop, replacedAddress: !!res.offchain.replacedAddress } : null,
+      };
+      const txs = rec.steps.filter((s) => s.sent).length;
+      this.sql.exec('UPDATE attempts SET outcome = ?, rec = ? WHERE id = ?', outcome, JSON.stringify(rec), id);
+      this.sql.exec('DELETE FROM attempts WHERE id <= ?', id - KEEP);
+      this.count(kind, outcome, txs);
+      console.log(JSON.stringify({ ev: 'attempt', id, kind, outcome, txs }));
+      // PRIVATE detail for the visitor who asked (returned once, never stored): off-chain verdict with reasons.
+      if (res.offchain) detail = { reasons: res.offchain.reasons || [], warnings: res.offchain.warnings || [], proposed: res.offchain.proposed || {} };
+      return { status: 200, id, rec: { id, ...rec }, detail };
+    } catch (e) {
+      // R2 (F8 gap): if building or saving the record fails, the row must not stay 'running'
+      console.log(JSON.stringify({ ev: 'record_failed', kind, name: e?.name }));
+      const rec = { kind, n: K.n, title: K.title, expect: K.expect, outcome: 'fault', at: new Date(at).toISOString(), note: 'the sandbox could not save this attempt', steps: [], offchain: null };
+      if (this.sql.exec('SELECT outcome FROM attempts WHERE id = ?', id).toArray()[0]?.outcome === 'running') {
+        this.sql.exec("UPDATE attempts SET outcome = 'fault', rec = ? WHERE id = ?", JSON.stringify(rec), id);
+        this.count(kind, 'fault', 0);
+      }
+      return { status: 200, id, rec: { id, ...rec }, detail: null };
+    }
   }
 
   async state({ limit = 25 } = {}) {

@@ -65,7 +65,7 @@ test('sandbox Worker over HTTP', { skip, timeout: 1_800_000 }, async (t) => {
       for (const [kind, K] of Object.entries(KINDS)) {
         await t1.test(`${K.n}. ${kind} (form POST, HTML answer)`, async () => {
           const r = await post(S.base, { kind, text: '' }, { ip: `198.51.100.${10 + K.n}` });
-          assert.equal(r.status, 200, r.text.slice(0, 400));
+          assert.equal(r.status, 200, r.text.match(/<title>[^<]*/)?.[0] + ' ' + r.text.match(/class="lede">[^<]*/)?.[0]);
           assert.match(r.text, K.control ? /Accepted: a genuine invoice is staged/ : /Refused on chain/);
           const s = await state(S.base);
           const a = s.attempts[0];
@@ -207,6 +207,12 @@ test('sandbox Worker over HTTP', { skip, timeout: 1_800_000 }, async (t) => {
         const h1 = await (await fetch(S.base + '/healthz')).json(); const h2 = await (await fetch(S.base + '/healthz')).json();
         assert.equal(h1.checkedAt, h2.checkedAt, 'health cached');
         for (const [k, v] of Object.entries(h1)) if (k !== 'checkedAt') assert.equal(typeof v, 'boolean', `healthz.${k} is not a boolean`);
+        // R2-2: /api/state is cached 5 s too, and a finished attack drops the cache
+        const s1 = await fetch(S.base + '/api/state'); const s2 = await fetch(S.base + '/api/state');
+        assert.ok(s1.headers.get('x-rendered-at')); assert.equal(s1.headers.get('x-rendered-at'), s2.headers.get('x-rendered-at'), '/api/state cached');
+        await post(S.base, { kind: 'zero_amount' }, { ip: '198.51.100.90' });
+        const s3 = await fetch(S.base + '/api/state');
+        assert.notEqual(s3.headers.get('x-rendered-at'), s1.headers.get('x-rendered-at'), 'POSITIVE CONTROL: fresh after an attack');
       });
 
       await t1.test('GUARD-OFF CONTROL: with the interval relaxed, the same visitor twice in a row is NOT limited', async () => {
@@ -222,7 +228,7 @@ test('sandbox Worker over HTTP', { skip, timeout: 1_800_000 }, async (t) => {
     const S = dev(18792);
     try {
       const s0 = await state(S.base);
-      assert.deepEqual(s0.limits, { ipIntervalS: 60, ipDay: 30, globalDay: 300, globalHour: 30, demoDay: 40, maxQueue: 4 });
+      assert.deepEqual(s0.limits, { ipIntervalS: 60, ipDay: 30, globalDay: 300, globalHour: 30, net48Hour: 10, demoDay: 40, maxQueue: 4 });
       const a = await post(S.base, { kind: 'zero_amount' }, { ip: '203.0.113.50' });
       const n0 = await nonces();
       const b = await post(S.base, { kind: 'zero_amount' }, { ip: '203.0.113.50' });
@@ -262,6 +268,17 @@ test('sandbox Worker over HTTP', { skip, timeout: 1_800_000 }, async (t) => {
     } finally { S.stop(); }
   });
 
+  await t.test('phase 3c: per-IPv6-/48 hourly cap', phase(3), async () => {
+    const S = dev(18801, ['LIMIT_IP_INTERVAL_S:0', 'LIMIT_NET48_HOUR:2']);
+    try {
+      const codes = [];
+      for (const ip of ['2001:db8:5:1::1', '2001:db8:5:2::1', '2001:db8:5:3::1', '2001:db8:6:1::1', '203.0.113.68']) {
+        const r = await post(S.base, { kind: 'zero_amount' }, { ip, json: true }); codes.push(r.status === 429 ? r.json.code : r.status);
+      }
+      assert.deepEqual(codes, [200, 200, 'net_hour', 200, 200], 'third /64 in one /48 refused; another /48 and IPv4 fine');
+    } finally { S.stop(); }
+  });
+
   await t.test('phase 3b: global hourly cap; demo budget behind the secret header', phase(3), async () => {
     const TOKEN = 'demo-' + 'k'.repeat(40);
     const S = dev(18797, ['LIMIT_IP_INTERVAL_S:0', 'LIMIT_GLOBAL_HOUR:2', `DEMO_TOKEN:${TOKEN}`, 'LIMIT_DEMO_DAY:2']);
@@ -270,12 +287,12 @@ test('sandbox Worker over HTTP', { skip, timeout: 1_800_000 }, async (t) => {
       for (const ip of ['203.0.113.63', '203.0.113.64', '203.0.113.65']) a.push((await post(S.base, { kind: 'zero_amount' }, { ip, json: true })));
       assert.deepEqual(a.map((r) => r.status), [200, 200, 429]); assert.equal(a[2].json.code, 'global_hour');
       const n0 = await nonces();
-      const wrong = await post(S.base, {}, { raw: 'kind=zero_amount', ip: '203.0.113.66', headers: { 'x-sandbox-demo': TOKEN.slice(0, -1) + 'x' }, json: true });
+      const wrong = await post(S.base, {}, { raw: 'kind=zero_amount', ip: '203.0.113.66', headers: { authorization: 'Bearer ' + TOKEN.slice(0, -1) + 'x' }, json: true });
       assert.equal(wrong.status, 403, 'wrong demo token = normal path; no Turnstile token -> refused');
       assert.deepEqual(await nonces(), n0);
       const d = [];
-      for (let i = 0; i < 3; i++) d.push(await post(S.base, {}, { raw: 'kind=zero_amount', ip: '203.0.113.67', headers: { 'x-sandbox-demo': TOKEN }, json: true }));
-      assert.deepEqual(d.map((r) => r.status), [200, 200, 429], 'demo works while the public hour cap is hit, within its own budget');
+      for (let i = 0; i < 3; i++) d.push(await post(S.base, {}, { raw: 'kind=zero_amount', ip: '203.0.113.67', headers: { authorization: 'Bearer ' + TOKEN }, json: true }));
+      assert.deepEqual(d.map((r) => r.status), [200, 200, 429], JSON.stringify(d.map((r) => r.json)) + ' demo works while the public hour cap is hit, within its own budget');
       assert.equal(d[0].json.attempt.outcome, 'refused'); assert.equal(d[2].json.code, 'demo_day');
     } finally { S.stop(); }
   });
@@ -338,11 +355,11 @@ test('sandbox Worker over HTTP', { skip, timeout: 1_800_000 }, async (t) => {
     let S = dev(18799, ['LIMIT_IP_INTERVAL_S:0']);
     let id;
     try {
+      const next = ((await state(S.base)).attempts[0]?.id || 0) + 1;      // /attempt/:id is not cached; /api/state is (5 s)
       const pending = post(S.base, { kind: 'hijack_after_staging' }, { ip: '203.0.113.95', json: true }).catch(() => null);
       for (let i = 0; i < 100 && !id; i++) {
-        const s = await state(S.base);
-        const r = s.attempts.find((a) => a.outcome === 'running');
-        if (r) id = r.id; else await new Promise((res) => setTimeout(res, 100));
+        const r = await fetch(S.base + `/attempt/${next}`);
+        if (r.status === 200 && /Still running/.test(await r.text())) id = next; else await new Promise((res) => setTimeout(res, 100));
       }
       assert.ok(id, 'a running row was visible while the attempt was in flight');
       S.stop();

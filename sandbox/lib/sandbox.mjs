@@ -28,7 +28,7 @@ export const PAYRUN_ABI = parseAbi([
   'function payeeStatus(uint256 agentId) view returns (uint8 state, address wallet, uint64 releaseAt, uint32 changes)',
   'event Staged(uint256 indexed runId, address indexed key, uint256 lines, uint256 total)',
   'event Rejected(uint256 indexed runId, string reason)',
-  'event Paid(uint256 indexed runId, uint256 line, bytes32 indexed invoiceHash, bytes32 invoiceRef, uint256 agentId, address payee, uint256 amount)',
+  'event Paid(uint256 indexed runId, uint256 line, bytes32 indexed invoiceHash, bytes32 invoiceRef, uint256 indexed agentId, address payee, uint256 amount)',
   'event StagedOnHold(uint256 indexed runId, uint256 line, uint256 indexed agentId, address payee, uint64 releaseAt)',
   'event PaymentBlocked(uint256 indexed runId, uint256 line, uint256 indexed agentId, address payee, uint8 reason, uint64 releaseAt)',
   'event PayeeChanged(uint256 indexed agentId, address indexed from, address indexed to, uint32 changes)',

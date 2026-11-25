@@ -1,7 +1,7 @@
 // Unit checks for the Worker's pure parts: limits (defaults, prod clamps), config gate, HTML escaping. Plain `node --test`.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { limitsFrom, parseConfig, DEFAULT_LIMITS, ipKey, turnstileConfigError, turnstileOk, demoOk, publicConfigFrom } from '../worker/src/limits.mjs';
+import { limitsFrom, parseConfig, DEFAULT_LIMITS, ipKey, net48Key, turnstileConfigError, turnstileOk, demoOk, publicConfigFrom } from '../worker/src/limits.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, symlinkSync, writeFileSync, readFileSync, lstatSync, statSync, rmSync } from 'node:fs';
 import { esc, renderHome, renderAttempt } from '../worker/src/page.mjs';
@@ -15,19 +15,19 @@ const cfg = { chainId: 44005, rpc: 'https://rpc-test.qday.info', payrun: A('a'),
 const env = (o = {}) => ({ SANDBOX_CONFIG: JSON.stringify(cfg), SANDBOX_KEYS: JSON.stringify(keys), ...o });
 
 test('limits: defaults are the plan (60 s, 30/IP/day, 300/day)', () => {
-  const plan = { ipIntervalS: 60, ipDay: 30, globalDay: 300, globalHour: 30, demoDay: 40, maxQueue: 4 };
+  const plan = { ipIntervalS: 60, ipDay: 30, globalDay: 300, globalHour: 30, net48Hour: 10, demoDay: 40, maxQueue: 4 };
   assert.deepEqual(limitsFrom({}), plan);
   assert.deepEqual(DEFAULT_LIMITS, plan);
 });
 test('limits: outside dev, vars can only tighten', () => {
   const l = limitsFrom({ LIMIT_IP_DAY: '1000', LIMIT_GLOBAL_DAY: '99999', LIMIT_IP_INTERVAL_S: '0', LIMIT_QUEUE: '50', LIMIT_GLOBAL_HOUR: '999', LIMIT_DEMO_DAY: '999' });
-  assert.deepEqual(l, { ipIntervalS: 60, ipDay: 30, globalDay: 300, globalHour: 30, demoDay: 40, maxQueue: 4 });
+  assert.deepEqual(l, { ipIntervalS: 60, ipDay: 30, globalDay: 300, globalHour: 30, net48Hour: 10, demoDay: 40, maxQueue: 4 });
   assert.deepEqual(limitsFrom({ LIMIT_IP_DAY: '5', LIMIT_GLOBAL_DAY: '50', LIMIT_IP_INTERVAL_S: '120', LIMIT_GLOBAL_HOUR: '10' }),
-    { ipIntervalS: 120, ipDay: 5, globalDay: 50, globalHour: 10, demoDay: 40, maxQueue: 4 });
+    { ipIntervalS: 120, ipDay: 5, globalDay: 50, globalHour: 10, net48Hour: 10, demoDay: 40, maxQueue: 4 });
 });
 test('limits: POSITIVE CONTROL: the same relaxing vars DO apply on a dev run', () => {
   assert.deepEqual(limitsFrom({ SANDBOX_DEV: '1', LIMIT_IP_DAY: '1000', LIMIT_GLOBAL_DAY: '1000', LIMIT_IP_INTERVAL_S: '0', LIMIT_QUEUE: '20', LIMIT_GLOBAL_HOUR: '1000' }),
-    { ipIntervalS: 0, ipDay: 1000, globalDay: 1000, globalHour: 1000, demoDay: 40, maxQueue: 20 });
+    { ipIntervalS: 0, ipDay: 1000, globalDay: 1000, globalHour: 1000, net48Hour: 10, demoDay: 40, maxQueue: 20 });
 });
 test('limits: garbage values throw', () => {
   for (const v of ['-1', '1e3', 'abc', '12345678']) assert.throws(() => limitsFrom({ LIMIT_IP_DAY: v }));
@@ -130,4 +130,13 @@ test('F7: mkvars refuses a symlinked --out and writes a fresh 0600 file', { skip
     assert.equal(statSync(d + '/vars').mode & 0o777, 0o600);
     assert.ok(!ok.stdout.match(/0x[0-9a-f]{64}/i), 'no key printed');
   } finally { rmSync(d, { recursive: true, force: true }); }
+});
+
+test('R2-1: IPv6 /48 key (IPv4 has none)', () => {
+  assert.equal(net48Key('2001:db8:1:2::1'), '2001:db8:1::/48');
+  assert.equal(net48Key('2001:db8:1:ffff:1::9'), net48Key('2001:DB8:0001::5'));
+  assert.notEqual(net48Key('2001:db8:1::1'), net48Key('2001:db8:2::1'));
+  assert.equal(net48Key('203.0.113.7'), '');
+  assert.equal(net48Key('junk::1::2'), '');
+  assert.deepEqual(limitsFrom({ LIMIT_NET48_HOUR: '50' }).net48Hour, 10, 'cannot be raised outside dev');
 });
