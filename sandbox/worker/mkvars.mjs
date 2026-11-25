@@ -8,7 +8,7 @@
 //
 // Only the 8 keys the attacks need go to the Worker. NOT included: funder, treasury, vendor_acme (the Worker cannot move the
 // treasury's tUSD8 itself; the most any leak can do is what the sandbox owner key can do on a 0.09 tUSD8 allowance).
-import { readFileSync, writeFileSync, chmodSync, realpathSync, lstatSync } from 'node:fs';
+import { readFileSync, writeFileSync, chmodSync, realpathSync, lstatSync, renameSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { privateKeyToAccount } from 'viem/accounts';
 
@@ -52,7 +52,12 @@ if (mode === 'fork') {
     `SANDBOX_CONFIG=${q(JSON.stringify(config))}`,
     'TURNSTILE_SECRET=1x0000000000000000000000000000000AA',            // Cloudflare's documented always-pass TEST secret
   ];
-  writeFileSync(out, lines.join('\n') + '\n', { mode: 0o600 }); chmodSync(out, 0o600);
+  // F7: never follow a symlink at --out; write a fresh 0600 file (O_EXCL) and rename it into place
+  try { if (lstatSync(out).isSymbolicLink()) die('--out is a symlink'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  const tmp = `${out}.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(tmp, lines.join('\n') + '\n', { mode: 0o600, flag: 'wx' });
+  chmodSync(tmp, 0o600);
+  renameSync(tmp, out);
   console.log(`wrote ${out} (mode 600): 8 keys, config for PayRunV2 ${config.payrun}`);
 } else {
   if (!args.includes('--put-secrets')) { console.log(JSON.stringify({ ...config }, null, 1)); process.exit(0); }

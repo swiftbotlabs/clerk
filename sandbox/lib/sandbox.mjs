@@ -80,6 +80,7 @@ export const SAMPLE_INVOICES = {
 
 const UNIT = 10_000n;              // tUSD8 has 6 decimals: 1 cent = 10,000 units
 const MAX_TEXT = 4096;
+const MAX_VISITOR_UNITS = 1_000_000n;   // 1.00 tUSD8
 
 export class SandboxError extends Error {}
 
@@ -149,7 +150,7 @@ export function makeSandbox(cfg) {
   /** A refusal attempt: simulate, require the expected revert, send, require a reverted receipt. */
   async function refusal(step, from, functionName, args, expect, gas = gasStage) {
     const sim = await simulate(from, functionName, args);
-    if (sim.ok || sim.error.name !== expect) {
+    if (sim.ok || sim.error.name === 'UNDECODED' || sim.error.name !== expect) {   // F5: never send on an undecoded simulation
       return { step, from, expect, sent: false, fault: true, simulated: sim.ok ? 'WOULD SUCCEED' : sim.error.name, simArgs: sim.ok ? [] : sim.error.args };
     }
     const tx = await send(from, cfg.payrun, PAYRUN_ABI, functionName, args, gas);
@@ -209,11 +210,14 @@ export function makeSandbox(cfg) {
     // visitor addresses never go on chain: keep the registered wallet if that is what the invoice names, else a fresh address
     const p = String(proposed.wallet || '').trim();
     const payee = p.toLowerCase() === match.wallet.toLowerCase() ? match.wallet : attacker;
-    const cents = /^\d+(\.\d{1,2})?$/.test(String(proposed.amount).replaceAll(',', '')) ? String(proposed.amount).replaceAll(',', '') : '0.05';
+    // F6: visitor amounts are clamped: anything odd or over 1.00 becomes the 0.05 default (never an encoder overflow / public fault)
+    const amt = String(proposed.amount ?? '').replaceAll(',', '');
+    const cents = amt.length <= 12 && /^\d+(\.\d{1,2})?$/.test(amt) ? amt : '0.05';
     const [w, f = ''] = cents.split('.');
     const units = (BigInt(w) * 100n + BigInt((f + '00').slice(0, 2))) * UNIT;
-    return { text: src, proposed, verdict, agentId: match.id, payee, replacedAddress: payee !== match.wallet && p !== '' && p.toLowerCase() !== attacker.toLowerCase(),
-      units: units > 0n ? units : 50_000n, ref: proposed.reference || `SBX-${n}`, hash: keccak256(stringToHex(normText(src) + '|' + n + '|' + attacker)) };
+    return { text: src, proposed, verdict, agentId: match.id, payee, registeredPayee: payee === match.wallet, replacedAddress: payee !== match.wallet && p !== '' && p.toLowerCase() !== attacker.toLowerCase(),
+      // F1: the on-chain invoiceRef is always ours (SBX-n); visitor text never reaches calldata
+      units: units > 0n && units <= MAX_VISITOR_UNITS ? units : 50_000n, ref: `SBX-${n}`, hash: keccak256(stringToHex(normText(src) + '|' + n + '|' + attacker)) };
   }
 
   /** Run one attack. Returns {kind, n, title, steps[], refused, fault, offchain?}. Never throws for a refusal; throws SandboxError
@@ -235,10 +239,16 @@ export function makeSandbox(cfg) {
         // "force it": the clerk's checks would hold or block this line; the sandbox stages it anyway so the CONTRACT has to refuse
         if (kind === 'genuine') steps.push(await accepted('stage the genuine invoice', 'clerk', [l]));
         else {
-          const sim = await simulate('clerk', 'stage', [[l]]);
-          const expect = sim.ok ? 'Staged' : sim.error.name;
-          if (sim.ok) steps.push({ ...(await accepted('stage (contract accepted: payee is the registered wallet)', 'clerk', [l])), fault: false, note: 'accepted: your invoice paid the registered wallet' });
-          else steps.push(await refusal('clerk stages the line anyway', 'clerk', 'stage', [[l]], expect));
+          const registeredPayee = inv.registeredPayee;
+          if (!registeredPayee) {
+            // F5: a replaced payee must be refused for the PAYEE; any other answer is a fault and nothing is sent
+            steps.push(await refusal('clerk stages the line anyway', 'clerk', 'stage', [[l]], 'PayeeNotRegistered'));
+          } else {
+            const sim = await simulate('clerk', 'stage', [[l]]);
+            if (sim.ok) steps.push({ ...(await accepted('stage (contract accepted: payee is the registered wallet)', 'clerk', [l])), fault: false, note: 'accepted: your invoice named the registered wallet (staged, never paid here)' });
+            else steps.push({ step: 'not sent', from: 'clerk', sent: false, fault: false, notCounted: true, simulated: sim.error.name,
+              note: 'your invoice named the registered wallet; the contract would refuse it for another reason, so nothing was sent and it is not counted' });
+          }
         }
         break;
       }
@@ -301,7 +311,8 @@ export function makeSandbox(cfg) {
     const fault = steps.some((s) => s.fault);
     const last = steps.at(-1);
     const refused = !K.control && !fault && last?.sent && (last.status === 'reverted' || String(last.error || '').startsWith('PaymentBlocked'));
-    return { kind, n: K.n, title: K.title, expect: K.expect, steps: steps.map(({ logs, ...s }) => s), refused: Boolean(refused),
+    const notCounted = steps.some((s) => s.notCounted);
+    return { kind, n: K.n, title: K.title, expect: K.expect, steps: steps.map(({ logs, ...s }) => s), refused: Boolean(refused), notCounted,
       accepted: K.control ? !fault : (last?.expect === 'Staged' && !fault), fault, offchain, at: new Date().toISOString() };
   }
 

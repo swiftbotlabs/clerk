@@ -10,9 +10,18 @@ preview_urls = false
 [vars]
 SANDBOX_OFF = "0"          # kill switch: "1" refuses every POST /attack (page and log stay up)
 SANDBOX_DEV = "0"          # "1" only for wrangler dev against a local anvil fork
-# Turnstile site key: Cloudflare's always-pass TEST key until the real widget is created (local-agent deploy step)
+# Turnstile: Cloudflare's always-pass TEST site key until the real widget is created (local-agent deploy step). Outside dev the
+# Worker REFUSES attacks (503) while a test key is set or TURNSTILE_HOSTNAME is empty (F2).
 TURNSTILE_SITEKEY = "1x00000000000000000000AA"
-# Limits default to 60 s / 30 per IP per day / 300 per day; vars can only tighten them outside dev.
+TURNSTILE_HOSTNAME = ""
+# Limits default to 60 s / 30 per visitor per day / 300 per day / 30 per hour; demo budget 40/day (secret DEMO_TOKEN,
+# header x-sandbox-demo). Vars can only tighten them outside dev.
+
+# F3: per-visitor request limit on every route (key = IPv4 or IPv6 /64). namespace_id is any account-unique integer.
+[[ratelimits]]
+name = "RL"
+namespace_id = "18001"
+simple = { limit = 120, period = 60 }
 
 [[durable_objects.bindings]]
 name = "SANDBOX"

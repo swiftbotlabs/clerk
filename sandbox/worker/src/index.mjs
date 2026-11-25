@@ -6,7 +6,7 @@
 // (kill switch again, rate limits, one-at-a-time queue, chain sends). No CORS headers are ever sent.
 import { KINDS } from '../../lib/sandbox.mjs';
 import { renderHome, renderAttempt, renderLog, renderMessage } from './page.mjs';
-import { limitsFrom, MAX_BODY, MAX_TEXT, MAX_TOKEN } from './limits.mjs';
+import { limitsFrom, MAX_BODY, MAX_TEXT, ipKey, turnstileOk, turnstileConfigError, demoOk, publicConfigFrom } from './limits.mjs';
 export { Sandbox } from './do.mjs';
 
 const CSP = "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; " +
@@ -30,6 +30,10 @@ const MESSAGES = {
   busy: ['Busy', 'Several attacks are already queued. Try again in half a minute.'],
   ip: ['Not allowed', 'Your request could not be matched to a visitor.'],
   config: ['Not configured', 'The sandbox is not configured.'],
+  tsconfig: ['Not configured', 'The human check is not configured, so attacks are off.'],
+  global_hour: ['Busy hour', 'The sandbox has run this hour\'s attempts for everyone. Try again later this hour.'],
+  demo_day: ['Demo budget used', 'The demo budget for today is used up.'],
+  rate: ['Slow down', 'Too many requests from your network. Wait a minute.'],
   text: ['Too long', `The invoice text can be at most ${MAX_TEXT} characters.`],
 };
 
@@ -59,23 +63,11 @@ async function readCapped(req, max) {
   return new TextDecoder('utf-8', { fatal: false }).decode(buf);
 }
 
-async function turnstileOk(env, token, ip) {
-  if (typeof token !== 'string' || token.length < 1 || token.length > MAX_TOKEN || !env.TURNSTILE_SECRET) return false;
-  const form = new FormData();
-  form.append('secret', env.TURNSTILE_SECRET); form.append('response', token); form.append('remoteip', ip);
-  try {
-    const r = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', { method: 'POST', body: form, signal: AbortSignal.timeout(8000) });
-    if (!r.ok) return false;
-    const d = await r.json();
-    if (d.success !== true) return false;
-    if (env.TURNSTILE_HOSTNAME && d.hostname !== env.TURNSTILE_HOSTNAME) return false;
-    return true;
-  } catch { return false; }
-}
-
 async function attack(req, env, stub, cfg) {
   const wantsJson = (req.headers.get('accept') || '').includes('application/json') && !(req.headers.get('accept') || '').includes('text/html');
   if (env.SANDBOX_OFF === '1') return refuse('off', 503, wantsJson, { cfg });
+  if (turnstileConfigError(env)) return refuse('tsconfig', 503, wantsJson, { cfg });      // F2: fail closed on test keys / no hostname
+  if (!cfg) return refuse('config', 503, wantsJson);
   const url = new URL(req.url);
   const origin = req.headers.get('origin');
   if (origin !== null && origin !== url.origin) return refuse('origin', 403, wantsJson, { cfg });
@@ -98,36 +90,55 @@ async function attack(req, env, stub, cfg) {
   if (text !== undefined && text.length > MAX_TEXT) return refuse('size', 413, wantsJson, { cfg });
   if (!text || !text.trim() || !KINDS[kind].invoice) text = undefined;
   const ip = req.headers.get('cf-connecting-ip') || '';
-  if (!ip) return refuse('ip', 400, wantsJson, { cfg });
-  if (!(await turnstileOk(env, fields.token, ip))) return refuse('turnstile', 403, wantsJson, { cfg });
-  const r = await stub.attack({ kind, text, ip });
+  const key = ipKey(ip);
+  if (!key) return refuse('ip', 400, wantsJson, { cfg });
+  // F4: a reserved demo budget behind a secret header (constant-time check); it replaces the human check, not the kill switch
+  const demo = await demoOk(env, req.headers.get('x-sandbox-demo'));
+  if (!demo && !(await turnstileOk(env, fields.token, ip))) return refuse('turnstile', 403, wantsJson, { cfg });
+  const r = await stub.attack({ kind, text, ip: key, demo });
   if (r.status !== 200) return refuse(r.code, r.status, wantsJson, { retryAfter: r.retryAfter, cfg });
   if (wantsJson) return json({ ok: true, id: r.id, attempt: r.rec, detail: r.detail });
   return html(renderAttempt({ rec: r.rec, detail: r.detail, cfg, fresh: true }));
 }
 
+// F3: / and /log are rendered at most once per 5 s per isolate (the Cache API is a no-op on workers.dev, isolate memory is not)
+const PAGE_TTL_MS = 5_000;
+const pageCache = new Map();
+async function cachedPage(path, render) {
+  const hit = pageCache.get(path);
+  const now = Date.now();
+  if (hit && now - hit.t < PAGE_TTL_MS) return html(hit.body, 200, { 'x-rendered-at': String(hit.t), 'cache-control': 'public, max-age=5' });
+  const body = await render();
+  pageCache.set(path, { t: now, body });
+  return html(body, 200, { 'x-rendered-at': String(now), 'cache-control': 'public, max-age=5' });
+}
+
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
-    const stub = env.SANDBOX.get(env.SANDBOX.idFromName('main'));
     const method = req.method;
+    // F3: per-visitor request limit on EVERY route (Workers Rate Limiting binding; required outside dev)
+    if (env.RL) {
+      const { success } = await env.RL.limit({ key: ipKey(req.headers.get('cf-connecting-ip')) || 'none' });
+      if (!success) return html(renderMessage('Slow down', 'Too many requests from your network. Wait a minute.'), 429, { 'retry-after': '60' });
+    } else if (env.SANDBOX_DEV !== '1') return html(renderMessage('Not configured', 'The sandbox is not configured.'), 503);
+    const stub = env.SANDBOX.get(env.SANDBOX.idFromName('main'));
+    const cfg = publicConfigFrom(env);
     if (url.pathname === '/attack') {
       if (method !== 'POST') return html(renderMessage('Not allowed', 'Use the form on the sandbox page.'), 405, { allow: 'POST' });
-      const cfg = await stub.publicConfig();
-      if (!cfg) return refuse('config', 503, false);
       return attack(req, env, stub, cfg);
     }
     if (method !== 'GET' && method !== 'HEAD') return html(renderMessage('Not allowed', 'Only GET here.'), 405, { allow: 'GET, HEAD' });
-    if (url.pathname === '/healthz') { const h = await stub.health(); return json(h, h.ok ? 200 : 503); }
-    const cfg = await stub.publicConfig();
+    if (url.pathname === '/healthz') {
+      const h = { ...(await stub.health()), turnstileConfig: !turnstileConfigError(env) };
+      h.ok = h.ok && h.turnstileConfig;
+      return json(h, h.ok ? 200 : 503);
+    }
     if (!cfg) return html(renderMessage('Not configured', 'The sandbox is not configured.'), 503);
     let limits;
     try { limits = limitsFrom(env); } catch { return html(renderMessage('Not configured', 'Bad limit settings.'), 503); }
-    if (url.pathname === '/') {
-      const state = await stub.state({ limit: 25 });
-      return html(renderHome({ state, cfg, sitekey: env.TURNSTILE_SITEKEY || '', limits }));
-    }
-    if (url.pathname === '/log') return html(renderLog({ state: await stub.state({ limit: 100 }), cfg }));
+    if (url.pathname === '/') return cachedPage('/', async () => renderHome({ state: await stub.state({ limit: 25 }), cfg, sitekey: env.TURNSTILE_SITEKEY || '', limits }));
+    if (url.pathname === '/log') return cachedPage('/log', async () => renderLog({ state: await stub.state({ limit: 100 }), cfg }));
     if (url.pathname === '/api/state') return json({ ...(await stub.state({ limit: 100 })), config: cfg });
     const m = /^\/attempt\/(\d{1,9})$/.exec(url.pathname);
     if (m) {

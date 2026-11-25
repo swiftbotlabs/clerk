@@ -1,11 +1,16 @@
 // The one Durable Object that owns every chain send. All attacks run one at a time through `this.tail` (a promise chain), so two
 // sends from the same key can never race for a nonce. SQLite holds the public attempt log (last 100), per-kind counters, and the
-// rate-limit hits (salted IP hashes, never raw IPs; pruned after 2 days).
+// rate-limit hits (salted hashes of the visitor key: IPv4 address or IPv6 /64; never raw IPs; pruned after 2 days).
 import { DurableObject } from 'cloudflare:workers';
+import { parseAbi } from 'viem';
 import { makeSandbox, KINDS, SandboxError, ERC20_ABI, jsonSafe } from '../../lib/sandbox.mjs';
 import { limitsFrom, parseConfig, dayStart } from './limits.mjs';
 
 const KEEP = 100;
+const HEALTH_TTL_MS = 30_000;
+const SESSION_MARGIN_S = 3n * 86_400n;     // /healthz goes 503 inside 3 days of a clerk session expiry (F5)
+const SESSIONS_ABI = parseAbi(['function sessions(address) view returns (uint64 expiry, uint64 day, uint128 perRunCap, uint128 perDayCap, uint128 stagedToday, bool revoked)']);
+const DEMO = 'demo';
 
 export class Sandbox extends DurableObject {
   constructor(ctx, env) {
@@ -23,6 +28,26 @@ export class Sandbox extends DurableObject {
     this.queued = 0;
     this.sb = null;
     this.treasuryCache = null;
+    this.healthCache = null;
+    this.recoverInterrupted();
+  }
+
+  /** F8: an attempt still 'running' when the object starts was cut off (CPU kill, redeploy, eviction): close it as a fault. */
+  recoverInterrupted() {
+    for (const r of this.sql.exec("SELECT id, kind, rec FROM attempts WHERE outcome = 'running'").toArray()) {
+      const rec = JSON.parse(r.rec);
+      rec.outcome = 'fault';
+      rec.note = 'interrupted before it finished; any transaction it sent is on the explorer under the sandbox keys';
+      this.sql.exec("UPDATE attempts SET outcome = 'fault', rec = ? WHERE id = ?", JSON.stringify(rec), r.id);
+      this.count(r.kind, 'fault', 0);
+    }
+  }
+
+  count(kind, outcome, txs) {
+    this.sql.exec(`INSERT INTO counts (kind, attempts, refused, accepted, faults, resting, txs) VALUES (?, 1, ?, ?, ?, ?, ?)
+      ON CONFLICT(kind) DO UPDATE SET attempts = attempts + 1, refused = refused + excluded.refused, accepted = accepted + excluded.accepted,
+      faults = faults + excluded.faults, resting = resting + excluded.resting, txs = txs + excluded.txs`,
+      kind, +(outcome === 'refused'), +(outcome === 'accepted'), +(outcome === 'fault'), +(outcome === 'resting'), txs);
   }
 
   salt() {
@@ -33,8 +58,8 @@ export class Sandbox extends DurableObject {
     return s;
   }
 
-  async ipHash(ip) {
-    const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(this.salt() + '|' + ip));
+  async ipHash(key) {
+    const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(this.salt() + '|' + key));
     return [...new Uint8Array(d)].slice(0, 16).map((b) => b.toString(16).padStart(2, '0')).join('');
   }
 
@@ -48,30 +73,40 @@ export class Sandbox extends DurableObject {
     return this.sb;
   }
 
-  /** Synchronous check-and-reserve: SQLite calls are synchronous inside a DO, so two requests cannot both take the last slot. */
-  reserve(ipH, now, L) {
+  /** Synchronous check-and-reserve: SQLite calls are synchronous inside a DO, so two requests cannot both take the last slot.
+   *  Demo requests (secret header, checked in the Worker) use their own daily budget and are left out of the public caps. */
+  reserve(ipH, now, L, demo) {
     const ds = dayStart(now);
-    const g = this.sql.exec('SELECT COUNT(*) AS n FROM hits WHERE ts >= ?', ds).one().n;
+    if (this.queued >= L.maxQueue) return { ok: false, code: 'busy', retryAfter: 30 };
+    if (demo) {
+      const d = this.sql.exec('SELECT COUNT(*) AS n FROM hits WHERE ip = ? AND ts >= ?', DEMO, ds).one().n;
+      if (d >= L.demoDay) return { ok: false, code: 'demo_day', retryAfter: Math.ceil((ds + 86_400_000 - now) / 1000) };
+      this.sql.exec('INSERT INTO hits (ip, ts) VALUES (?, ?)', DEMO, now);
+      return { ok: true };
+    }
+    const g = this.sql.exec('SELECT COUNT(*) AS n FROM hits WHERE ts >= ? AND ip != ?', ds, DEMO).one().n;
     if (g >= L.globalDay) return { ok: false, code: 'global_day', retryAfter: Math.ceil((ds + 86_400_000 - now) / 1000) };
-    const mine = this.sql.exec('SELECT COUNT(*) AS n, MAX(ts) AS last FROM hits WHERE ip = ? AND ts >= ?', ipH, now - 86_400_000 * 2).one();
+    const hr = this.sql.exec('SELECT COUNT(*) AS n, MIN(ts) AS first FROM hits WHERE ts >= ? AND ip != ?', now - 3_600_000, DEMO).one();
+    if (hr.n >= L.globalHour) return { ok: false, code: 'global_hour', retryAfter: Math.max(1, Math.ceil((hr.first + 3_600_000 - now) / 1000)) };
+    const mine = this.sql.exec('SELECT MAX(ts) AS last FROM hits WHERE ip = ? AND ts >= ?', ipH, now - 86_400_000 * 2).one();
     const today = this.sql.exec('SELECT COUNT(*) AS n FROM hits WHERE ip = ? AND ts >= ?', ipH, ds).one().n;
     if (today >= L.ipDay) return { ok: false, code: 'ip_day', retryAfter: Math.ceil((ds + 86_400_000 - now) / 1000) };
     if (mine.last !== null && now - mine.last < L.ipIntervalS * 1000) return { ok: false, code: 'ip_interval', retryAfter: Math.ceil((mine.last + L.ipIntervalS * 1000 - now) / 1000) };
-    if (this.queued >= L.maxQueue) return { ok: false, code: 'busy', retryAfter: 30 };
     this.sql.exec('INSERT INTO hits (ip, ts) VALUES (?, ?)', ipH, now);
     this.sql.exec('DELETE FROM hits WHERE ts < ?', now - 86_400_000 * 2);
     return { ok: true };
   }
 
-  /** RPC from the Worker. Input already validated there (kind whitelist, text size, Turnstile); validated again here. */
-  async attack({ kind, text, ip }) {
+  /** RPC from the Worker. Input already validated there (kind whitelist, text size, Turnstile or demo); validated again here.
+   *  `ip` is the visitor KEY (IPv4 or IPv6 /64), already grouped by the Worker. */
+  async attack({ kind, text, ip, demo = false }) {
     if (this.env.SANDBOX_OFF === '1') return { status: 503, code: 'off' };
     if (!Object.hasOwn(KINDS, kind)) return { status: 400, code: 'kind' };
     if (typeof ip !== 'string' || !ip || ip.length > 64) return { status: 400, code: 'ip' };
     if (text !== undefined && (typeof text !== 'string' || text.length > 4096)) return { status: 413, code: 'text' };
     if (!KINDS[kind].invoice) text = undefined;
     const L = limitsFrom(this.env);
-    const r = this.reserve(await this.ipHash(ip), Date.now(), L);
+    const r = this.reserve(await this.ipHash(ip), Date.now(), L, demo === true);
     if (!r.ok) return { status: r.code === 'busy' ? 503 : 429, code: r.code, retryAfter: r.retryAfter };
     this.queued++;
     const job = this.tail.then(() => this.run(kind, text));
@@ -81,6 +116,10 @@ export class Sandbox extends DurableObject {
 
   async run(kind, text) {
     const at = Date.now();
+    const K = KINDS[kind];
+    // F8: the row exists BEFORE the first send, so a cut-off attempt still leaves a public record
+    const id = this.sql.exec('INSERT INTO attempts (at, kind, outcome, rec) VALUES (?, ?, ?, ?) RETURNING id', at, kind, 'running',
+      JSON.stringify({ kind, n: K.n, title: K.title, expect: K.expect, outcome: 'running', at: new Date(at).toISOString(), note: null, steps: [], offchain: null })).one().id;
     let res, outcome, detail = null;
     try {
       const S = this.sandbox();
@@ -89,14 +128,15 @@ export class Sandbox extends DurableObject {
         this.chainChecked = true;
       }
       res = jsonSafe(await S.attack(kind, { text }));
-      outcome = res.fault ? 'fault' : KINDS[kind].control ? (res.accepted ? 'accepted' : 'fault') : res.refused ? 'refused' : res.accepted ? 'accepted' : 'fault';
+      outcome = res.fault ? 'fault' : K.control ? (res.accepted ? 'accepted' : 'fault') : res.refused ? 'refused' : res.accepted ? 'accepted'
+        : res.notCounted ? 'not_counted' : 'fault';
     } catch (e) {
       const resting = e instanceof SandboxError;
       outcome = resting ? 'resting' : 'fault';
       // no key material can be in these messages; keep them short anyway
       const msg = String(e?.shortMessage || e?.message || e).replace(/0x[0-9a-fA-F]{64,}/g, '0x…').slice(0, 160);
       console.log(JSON.stringify({ ev: 'attack_error', kind, resting, name: e?.name, msg }));
-      res = { kind, n: KINDS[kind].n, title: KINDS[kind].title, expect: KINDS[kind].expect, steps: [], note: resting ? msg : 'the sandbox hit an error; nothing was paid' };
+      res = { kind, n: K.n, title: K.title, expect: K.expect, steps: [], note: resting ? msg : 'the sandbox hit an error; nothing was paid' };
     }
     // PUBLIC record: no visitor text, no reasons quoting it; only our step data (role names, tx hashes, decoded errors).
     const rec = {
@@ -107,12 +147,9 @@ export class Sandbox extends DurableObject {
       offchain: res.offchain ? { decision: res.offchain.decision, cop: res.offchain.cop, replacedAddress: !!res.offchain.replacedAddress } : null,
     };
     const txs = rec.steps.filter((s) => s.sent).length;
-    const id = this.sql.exec('INSERT INTO attempts (at, kind, outcome, rec) VALUES (?, ?, ?, ?) RETURNING id', at, kind, outcome, JSON.stringify(rec)).one().id;
+    this.sql.exec('UPDATE attempts SET outcome = ?, rec = ? WHERE id = ?', outcome, JSON.stringify(rec), id);
     this.sql.exec('DELETE FROM attempts WHERE id <= ?', id - KEEP);
-    this.sql.exec(`INSERT INTO counts (kind, attempts, refused, accepted, faults, resting, txs) VALUES (?, 1, ?, ?, ?, ?, ?)
-      ON CONFLICT(kind) DO UPDATE SET attempts = attempts + 1, refused = refused + excluded.refused, accepted = accepted + excluded.accepted,
-      faults = faults + excluded.faults, resting = resting + excluded.resting, txs = txs + excluded.txs`,
-      kind, +(outcome === 'refused'), +(outcome === 'accepted'), +(outcome === 'fault'), +(outcome === 'resting'), txs);
+    this.count(kind, outcome, txs);
     console.log(JSON.stringify({ ev: 'attempt', id, kind, outcome, txs }));
     // PRIVATE detail for the visitor who asked (returned once, never stored): off-chain verdict with reasons.
     if (res.offchain) detail = { reasons: res.offchain.reasons || [], warnings: res.offchain.warnings || [], proposed: res.offchain.proposed || {} };
@@ -124,7 +161,7 @@ export class Sandbox extends DurableObject {
     const attempts = this.sql.exec('SELECT id, rec FROM attempts ORDER BY id DESC LIMIT ?', n).toArray().map((r) => ({ id: r.id, ...JSON.parse(r.rec) }));
     const counts = Object.fromEntries(this.sql.exec('SELECT * FROM counts').toArray().map((r) => [r.kind, r]));
     const ds = dayStart(Date.now());
-    const today = this.sql.exec('SELECT COUNT(*) AS n FROM hits WHERE ts >= ?', ds).one().n;
+    const today = this.sql.exec('SELECT COUNT(*) AS n FROM hits WHERE ts >= ? AND ip != ?', ds, DEMO).one().n;
     return { attempts, counts, today, limits: limitsFrom(this.env), treasury: await this.treasury(), off: this.env.SANDBOX_OFF === '1' };
   }
 
@@ -148,24 +185,25 @@ export class Sandbox extends DurableObject {
     return v;
   }
 
-  /** Health: config parses, RPC answers with the right chain, every key above its gas floor. */
+  /** Health (F3: cached 30 s, booleans only): config parses, RPC answers with the right chain, every key above its gas floor,
+   *  clerk + daycap sessions valid for more than 3 more days (F5). */
   async health() {
-    const out = { config: false, chain: false, keysAboveFloor: 0, keysTotal: 0, off: this.env.SANDBOX_OFF === '1' };
+    const now = Date.now();
+    if (this.healthCache && now - this.healthCache.t < HEALTH_TTL_MS) return this.healthCache.v;
+    const out = { config: false, chain: false, keysAboveFloor: false, sessionsValid: false, off: this.env.SANDBOX_OFF === '1' };
     try {
       const S = this.sandbox(); out.config = true;
       out.chain = (await S.pub.getChainId()) === this.cfg.chainId;
       const floor = BigInt(this.cfg.minBalanceWei);
       const bals = await Promise.all(Object.values(this.cfg.addresses).map((a) => S.pub.getBalance({ address: a })));
-      out.keysTotal = bals.length; out.keysAboveFloor = bals.filter((b) => b >= floor).length;
-    } catch (e) { out.error = String(e?.shortMessage || e?.message || 'error').replace(/0x[0-9a-fA-F]{40,}/g, '0x…').slice(0, 120); }
-    out.ok = out.config && out.chain && out.keysTotal > 0 && out.keysAboveFloor === out.keysTotal;
+      out.keysAboveFloor = bals.length === 8 && bals.every((b) => b >= floor);
+      const ts = (await S.pub.getBlock()).timestamp;
+      const exp = await Promise.all(['clerk', 'daycap'].map((r) => S.pub.readContract({ address: this.cfg.payrun, abi: SESSIONS_ABI, functionName: 'sessions', args: [this.cfg.addresses[r]] })));
+      out.sessionsValid = exp.every((s) => s[0] > ts + SESSION_MARGIN_S && s[5] === false);
+    } catch (e) { console.log(JSON.stringify({ ev: 'health_failed', name: e?.name })); }
+    out.ok = out.config && out.chain && out.keysAboveFloor && out.sessionsValid;
+    out.checkedAt = new Date(now).toISOString();
+    this.healthCache = { t: now, v: out };
     return out;
-  }
-
-  publicConfig() {
-    try { this.sandbox(); } catch { return null; }
-    const c = this.cfg;
-    return { network: c.network, explorer: c.explorer, payrun: c.payrun, registry: c.registry, treasury: c.treasury, treasuryStart: c.treasuryStart || null, token: c.token,
-      vendors: c.vendors, addresses: c.addresses, seed: c.seed || {} };
   }
 }

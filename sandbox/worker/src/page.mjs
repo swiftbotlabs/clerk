@@ -50,7 +50,7 @@ function addrLink(cfg, a, label) {
   return `<a href="${esc(cfg.explorer)}/address/${esc(a)}" rel="noopener">${esc(label || short(a))}</a>`;
 }
 
-const PILL = { refused: ['v-ok', 'Refused on chain'], accepted: ['v-hold', 'Accepted (control)'], fault: ['v-stop', 'Sandbox fault'], resting: ['v-hold', 'Sandbox resting'] };
+const PILL = { running: ['v-n', 'Running'], not_counted: ['v-n', 'Not counted'], refused: ['v-ok', 'Refused on chain'], accepted: ['v-hold', 'Accepted (control)'], fault: ['v-stop', 'Sandbox fault'], resting: ['v-hold', 'Sandbox resting'] };
 function pill(rec) {
   let [cls, txt] = PILL[rec.outcome] || ['v-hold', rec.outcome];
   if (rec.outcome === 'accepted' && rec.kind !== 'genuine') txt = 'Accepted: you named the registered wallet';
@@ -201,7 +201,8 @@ export function renderAttempt({ rec, detail, cfg, fresh }) {
   const good = rec.outcome === 'refused' || (rec.outcome === 'accepted');
   const head = rec.outcome === 'refused' ? 'Refused on chain' : rec.outcome === 'accepted'
     ? (rec.kind === 'genuine' ? 'Accepted: a genuine invoice is staged' : 'Accepted: your invoice named the registered wallet')
-    : rec.outcome === 'resting' ? 'The sandbox is resting' : 'The sandbox hit a fault';
+    : rec.outcome === 'resting' ? 'The sandbox is resting' : rec.outcome === 'running' ? 'Still running'
+    : rec.outcome === 'not_counted' ? 'Not sent: not a payee attack' : 'The sandbox hit a fault';
   let off = '';
   if (rec.offchain) {
     const dcls = rec.offchain.decision === 'PAYABLE' ? 'v-ok' : rec.offchain.decision === 'HOLD' ? 'v-hold' : 'v-stop';
