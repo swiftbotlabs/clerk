@@ -1,0 +1,51 @@
+{
+ "payrun": "0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541",
+ "items": [
+  {
+   "file": "payrunv2-run1",
+   "run_id": 1,
+   "agent_id": 1699,
+   "registered_name": "Globex Logistics",
+   "decision": "PAYABLE",
+   "cop": "MATCH",
+   "units": "100000",
+   "invoice_hash": "0x9b53ea2e1f158d4467bacc59075b7b278117d5329df08907ada1257c5d9803f2",
+   "proposed": {
+    "vendor": "Globex Logistics",
+    "wallet": "0xdA286b3Ad1f68d4e67a70417328743d013FC6B72",
+    "amount": "0.10",
+    "currency": "tUSD8",
+    "reference": "G-80",
+    "due_date": null
+   },
+   "evidence": {
+    "note": "Staged by the payee-change hold demo (e2e/block_v2_testnet.sh); there is no invoice document for this line."
+   },
+   "reasons": [],
+   "warnings": []
+  },
+  {
+   "file": "payrunv2-run2",
+   "run_id": 2,
+   "agent_id": 1698,
+   "registered_name": "Acme Supplies Ltd",
+   "decision": "PAYABLE",
+   "cop": "MATCH",
+   "units": "100000",
+   "invoice_hash": "0xeb4b193b7a7052cf7bf2e6618078bcb1d62df9ba2cd28b9a32e9d3d328e3d151",
+   "proposed": {
+    "vendor": "Acme Supplies Ltd",
+    "wallet": "0x44e13Ef1C1AB14EB0a298103aB7541CC7ab6Ece0",
+    "amount": "0.10",
+    "currency": "tUSD8",
+    "reference": "CLERK-PERM",
+    "due_date": null
+   },
+   "evidence": {
+    "note": "Staged by the clerk's Kernel permission in its first UserOperation (contracts/script/ClerkPermission.s.sol); there is no invoice document for this line."
+   },
+   "reasons": [],
+   "warnings": []
+  }
+ ]
+}

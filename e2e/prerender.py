@@ -14,6 +14,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -21,14 +22,18 @@ from pathlib import Path
 APP = Path(__file__).resolve().parent.parent
 RPC = os.environ.get("AEVUM_RPC", "https://rpc-test.qday.info")
 EXPLORER = "https://explorer-test.qday.info"
-STATUS = ["", "Waiting for your approval", "Paid", "Rejected"]
+STATUS = ["Could not read this run from the chain", "Waiting for your approval", "Paid", "Rejected"]
+RUN_TTL = 7 * 86400
+NAMES = {"0x2ee29a167cddb964aab9c899ea9ae89847e3da98": "PayRun", "0x89d14bf88d8df1ab8b0f520414fbbc9e1d69f541": "PayRunV2"}
 
 
-def cast(*args: str) -> str:
-    p = subprocess.run(["cast", *args, "--rpc-url", RPC], capture_output=True, text=True, timeout=60)
-    if p.returncode != 0:
-        raise RuntimeError(f"cast {args[0]}: {(p.stderr or p.stdout).strip()[:200]}")
-    return p.stdout.strip()
+def cast(*args: str, tries: int = 3) -> str:
+    for n in range(tries):   # the public RPC drops a request now and then: retry reads
+        p = subprocess.run(["cast", *args, "--rpc-url", RPC], capture_output=True, text=True, timeout=60)
+        if p.returncode == 0:
+            return p.stdout.strip()
+        time.sleep(2 * (n + 1))
+    raise RuntimeError(f"cast {args[0]}: {(p.stderr or p.stdout).strip()[:200]}")
 
 
 def esc(s) -> str:
@@ -53,19 +58,66 @@ def snippet(text, value) -> str:
     return "<div>" + esc(text) + "</div>"
 
 
-def slip(it: dict) -> str:
+def slip(it: dict, hold: dict | None = None) -> str:
     p, e = it["proposed"], it.get("evidence") or {}
-    return (f'<div class="slip"><div class="who">{esc(it["registered_name"])}<span class="id">agent #{esc(it["agent_id"])}</span></div>'
+    verdict = ('<span class="verdict v-hold">Registered wallet, on hold</span>' if hold and str(it.get("agent_id")) == hold["agent"]
+               else '<span class="verdict v-ok">Payee confirmed</span>')
+    src = (f'<div class="src"><div>{esc(e["note"])}</div></div>' if e.get("note") else
+           f'<div class="src">{snippet(e.get("amount"), p["amount"])}{snippet(e.get("reference"), p["reference"])}{snippet(e.get("due_date"), p.get("due_date"))}</div>')
+    due = f', due {esc(p["due_date"])}' if p.get("due_date") else ""
+    return (f'<div class="slip"><div class="who">{esc(it["registered_name"])} <span class="id">agent #{esc(it["agent_id"])}</span></div>'
             f'<div class="amt">{money(it["units"])}</div>'
-            f'<div class="meta"><span class="verdict v-ok">Payee confirmed</span>Invoice {esc(p["reference"])}, due {esc(p["due_date"])}, to {esc(short(p["wallet"]))}</div>'
-            f'<div class="src">{snippet(e.get("amount"), p["amount"])}{snippet(e.get("reference"), p["reference"])}{snippet(e.get("due_date"), p["due_date"])}</div></div>')
+            f'<div class="meta">{verdict} Invoice {esc(p["reference"])}{due}, to {esc(short(p["wallet"]))}</div>{src}</div>')
+
+
+def when(t: int) -> str:
+    return datetime.fromtimestamp(int(t), timezone.utc).strftime("%d %b %Y %H:%M UTC")
+
+
+def hold_of(payrun: str, rid: int, its: list[dict]) -> dict | None:
+    """Same reading as the page's holdOf(): PayRunV2.canExecute, then the blocked line. v1 has no canExecute -> None."""
+    try:
+        ok, line, reason, release = cast("call", payrun, "canExecute(uint256)(bool,uint256,uint8,uint64)", str(rid)).split("\n")[:4]
+    except RuntimeError:
+        return None
+    reason, release = int(reason.split()[0]), int(release.split()[0])
+    if ok.strip() == "true" or reason not in (1, 2, 3):
+        return None
+    l = cast("call", payrun, "lineOf(uint256,uint256)((uint256,address,uint128,bytes32,bytes32))", str(rid), line.split()[0])
+    agent, payee = l.strip("()").split(", ")[:2]
+    name = next((i["registered_name"] for i in its if str(i.get("agent_id")) == agent), f"agent #{agent}")
+    n, w = esc(name), esc(short(payee))
+    text = (f"<strong>Payment held.</strong> {n}'s wallet {w} is new or just changed. The hold ends {esc(when(release))}. Check the new details with the vendor on a number you already have (not one from the invoice), then confirm the payee, or reject the run."
+            if reason == 1 else
+            f"<strong>Payment held.</strong> This run was staged while {n}'s wallet {w} was still on hold, so waiting won't release it. Check the wallet with the vendor on a number you already have, then confirm the payee, or reject the run."
+            if reason == 2 else
+            f"<strong>Can't be paid.</strong> {n}'s registered wallet changed after this run was staged. Reject it; the clerk stages it again and the new wallet is held.")
+    return {"reason": reason, "agent": agent, "payee": payee, "text": text}
+
+
+def plural(n: int, one: str, many: str) -> str:
+    return f"{n} {one if n == 1 else many}"
+
+
+def headline(c: dict) -> str:
+    """Same wording as the page's headline(): counts everything that needs the owner."""
+    parts = []
+    if c["pay"]: parts.append(plural(c["pay"], "pay run to approve", "pay runs to approve"))
+    if c["held"]: parts.append(plural(c["held"], "held payment to confirm or reject", "held payments to confirm or reject"))
+    if c["clear"]: parts.append(plural(c["clear"], "run that can no longer pay (reject it)", "runs that can no longer pay (reject them)"))
+    if c["check"]: parts.append(plural(c["check"], "invoice to check", "invoices to check"))
+    if c["unread"]: parts.append(plural(c["unread"], "run could not be read from the chain", "runs could not be read from the chain"))
+    if not parts:
+        return "Nothing is waiting for you" if c["runs"] else "Nothing to approve"
+    s = ", ".join(parts)
+    return s[0].upper() + s[1:]
 
 
 def card(i: dict, cls: str, label: str) -> str:
     p = i["proposed"]
-    amt = f' · {esc(p["amount"])} {esc(p.get("currency", ""))}' if p.get("amount") else ""
+    amt = f' · <span class="nw">{esc(p["amount"])} {esc(p.get("currency", ""))}</span>' if p.get("amount") else ""
     lis = "".join(f"<li>{esc(r)}</li>" for r in [*(i.get("reasons") or []), *(i.get("warnings") or []), *([i["skip"]] if i.get("skip") else [])])
-    return f'<div class="item"><span class="verdict {cls}">{label}</span><strong>{esc(p.get("vendor") or i["file"])}</strong>{amt}<ul>{lis}</ul></div>'
+    return f'<div class="item"><span class="verdict {cls}">{label}</span> <strong>{esc(p.get("vendor") or i["file"])}</strong>{amt}<ul>{lis}</ul></div>'
 
 
 def tx_ok(h: str) -> bool:
@@ -79,14 +131,14 @@ def record() -> str:
     t1 = json.loads((APP / "e2e/testnet.json").read_text())
     t2 = json.loads((APP / "e2e/testnet_v2.json").read_text())
     rows = [
-        ("Run 1 staged by the clerk's session key (2 invoices; a redirect stopped, a look-alike held)", t1["stage_tx"]),
-        ("Run 1 paid by the owner's smart account (UserOperation)", t1["execute_tx"]),
-        ("Run 3 (shown above) staged", "0x24f2d55b9a0c2f2edf17c6215c6ff324336ebb50c7c58b74b2012885ae423b33"),
-        ("Run 3 paid from this page", "0xf01567cde9d18e6d06de1c473de937b41a9ec6c8bdb6cc8b25452f2df4e83303"),
+        ("PayRun run 1 staged by the clerk's session key (2 invoices; a redirect stopped, a look-alike held)", t1["stage_tx"]),
+        ("PayRun run 1 paid by the owner's smart account (UserOperation)", t1["execute_tx"]),
+        ("PayRun run 3 (shown above) staged", "0x24f2d55b9a0c2f2edf17c6215c6ff324336ebb50c7c58b74b2012885ae423b33"),
+        ("PayRun run 3 paid from this page", "0xf01567cde9d18e6d06de1c473de937b41a9ec6c8bdb6cc8b25452f2df4e83303"),
         ("PayRunV2 deployed (payee-change hold)", t2["payrun_v2_deploy_tx"]),
-        ("A new payee staged on hold, the owner's pay attempt blocked, nothing paid", t2["block_execute_tx"]),
+        ("PayRunV2 run 1 (shown above): a new payee staged on hold, the owner's pay attempt blocked, nothing paid", t2["block_execute_tx"]),
         ("Owner confirms a payee early (audit event on chain)", t2["confirm_tx"]),
-        ("The clerk's key as a Kernel permission: first UserOperation enables it and stages a run", t2["perm_stage_tx"]),
+        ("The clerk's key as a Kernel permission: first UserOperation enables it and stages PayRunV2 run 2 (shown above)", t2["perm_stage_tx"]),
         ("The owner revokes the clerk's permission", t2["perm_revoke_tx"]),
     ]
     lis = []
@@ -103,27 +155,41 @@ def record() -> str:
 
 def main(argv: list[str]) -> int:
     page = Path(argv[1]) if len(argv) > 1 else APP / "docs/index.html"
-    report = json.loads((page.parent / "report.json").read_text())
-    items = report.get("items") or []
-    by_run: dict[int, list[dict]] = {}
+    reports = [json.loads((page.parent / f).read_text()) for f in ("report.json", "report-v2.json") if (page.parent / f).exists()]
+    items = [dict(i, payrun=r["payrun"]) for r in reports for i in (r.get("items") or [])]
+    by_run: dict[tuple[str, int], list[dict]] = {}
     for it in items:
         if it.get("run_id"):
-            by_run.setdefault(int(it["run_id"]), []).append(it)
-    parts, waiting = [], 0
-    for rid, its in sorted(by_run.items()):
-        st = int(cast("call", report["payrun"], "runs(uint256)(uint8,address,uint64,uint128,uint32)", str(rid)).split()[0])
-        waiting += st == 1
+            by_run.setdefault((it["payrun"], int(it["run_id"])), []).append(it)
+    now = int(cast("block", "latest", "--field", "timestamp"))
+    parts, c = [], {"runs": len(by_run), "pay": 0, "held": 0, "clear": 0, "check": 0, "unread": 0}
+    for (payrun, rid), its in by_run.items():
+        try:
+            r = cast("call", payrun, "runs(uint256)(uint8,address,uint64,uint128,uint32)", str(rid)).split("\n")
+            st, staged_at = int(r[0].split()[0]), int(r[2].split()[0])
+        except RuntimeError:
+            st, staged_at = 0, 0
+        expired = st == 1 and now > staged_at + RUN_TTL
+        hold = hold_of(payrun, rid, its) if st == 1 and not expired else None
+        label = STATUS[st] if st < len(STATUS) else "Unknown"
+        if st == 0: c["unread"] += 1
+        elif expired: c["clear"] += 1; label = "Expired: staged more than 7 days ago, so it can no longer be paid"
+        elif hold and hold["reason"] == 3: c["clear"] += 1; label = "Can't be paid: the payee changed"
+        elif hold: c["held"] += 1; label = "Held: confirm the payee or reject"
+        elif st == 1: c["pay"] += 1
         total = sum(int(i["units"]) for i in its)
-        parts.append(f'<article class="run {"done" if st == 2 else ""}" data-run="{rid}"><div class="runhead"><div>'
-                     f'<div class="status">Run {rid}: {STATUS[st] if st < len(STATUS) else "Unknown"}</div>'
-                     f'<div class="total">{money(total)}<small>{len(its)} invoice{"s" if len(its) > 1 else ""}</small></div></div>'
-                     f'<div class="actions"></div></div>{"".join(slip(i) for i in its)}</article>')
-    headline = ("Nothing is waiting for you" if by_run else "Nothing to approve") if waiting == 0 else \
-        ("One pay run is waiting for you" if waiting == 1 else f"{waiting} pay runs are waiting for you")
+        held_html = f'<div class="slip"><div class="held" role="alert">{hold["text"]}</div></div>' if hold else ""
+        rank = (0 if hold and hold["reason"] != 3 else 2 if expired or hold else 1) if st == 1 else 3 if st == 0 else 4
+        parts.append((rank, f'<article class="run {"done" if st == 2 else ""}" data-run="{rid}"><div class="runhead"><div>'
+                     f'<div class="status">{esc(NAMES.get(payrun.lower(), short(payrun)))} run {rid}: {esc(label)}</div>'
+                     f'<div class="total">{money(total)} <small>· {plural(len(its), "invoice", "invoices")}</small></div></div>'
+                     f'<div class="actions"></div></div>{held_html}{"".join(slip(i, hold) for i in its)}</article>'))
 
     def other(dec: str) -> list[dict]:
         return [i for i in items if i.get("decision") == dec or (dec == "HOLD" and i.get("decision") == "PAYABLE" and i.get("skip")
                                                                  and not i.get("run_id") and str(i["skip"]).startswith("over"))]
+    c["check"] = len(other("HOLD"))
+    head = headline(c)
     hold = "".join(card(i, "v-hold", "Over the clerk's limit" if i["decision"] == "PAYABLE" else "Name is close, not exact"
                         if i.get("cop") == "CLOSE_MATCH" else "Unknown vendor" if i.get("cop") == "NO_MATCH" else "Not found in the invoice")
                    for i in other("HOLD")) or '<p class="empty">Nothing waiting.</p>'
@@ -137,8 +203,8 @@ def main(argv: list[str]) -> int:
         if s.count(old) != 1:
             raise SystemExit(f"prerender: anchor not found once: {old[:50]}")
         s = s.replace(old, new)
-    put('<h1 id="headline">Pay runs waiting for you</h1>', f'<h1 id="headline">{esc(headline)}</h1>')
-    runs_html = "".join(parts) or '<p class="empty">The clerk staged nothing this time.</p>'
+    put('<h1 id="headline">Pay runs waiting for you</h1>', f'<h1 id="headline">{esc(head)}</h1>')
+    runs_html = "".join(h for _, h in sorted(parts, key=lambda x: x[0])) or '<p class="empty">The clerk staged nothing this time.</p>'
     put('<section id="runs"></section>', f'<section id="runs">{runs_html}</section>')
     put('<section id="hold"></section>', f'<section id="hold">{hold}</section>')
     put('<section id="stop"></section>', f'<section id="stop">{stop}</section>\n{record()}\n'
@@ -146,7 +212,7 @@ def main(argv: list[str]) -> int:
         'connect the owner\'s wallet only to approve.</p>')
     put('<button id="connect">Connect wallet</button>', '<button id="connect">Connect wallet</button><noscript><span class="net">(JavaScript is only needed to approve)</span></noscript>')
     page.write_text(s)
-    print(f"prerendered {page}: {len(by_run)} run(s), {len(other('HOLD'))} held, {len(other('BLOCK'))} stopped, block {block}")
+    print(f"prerendered {page}: {len(by_run)} run(s) {c}, {len(other('HOLD'))} to check, {len(other('BLOCK'))} stopped, block {block}; headline: {head}")
     return 0
 
 

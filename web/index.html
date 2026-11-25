@@ -1,5 +1,8 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://rpc-test.qday.info http://127.0.0.1:8555; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta name="referrer" content="no-referrer">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Crect width=%2216%22 height=%2216%22 rx=%224%22 fill=%22%231F7A4D%22/%3E%3C/svg%3E">
 <title>Clerk pay runs</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -38,6 +41,10 @@ h2{font-size:20px;margin:40px 0 4px}h2+p{color:var(--muted);margin:0 0 14px;font
 .empty{color:var(--muted);font-style:italic}
 .held{grid-column:1/-1;background:var(--stop-bg);color:var(--ink);border-left:4px solid var(--stop);border-radius:0 8px 8px 0;padding:10px 12px;font-size:15px}
 .held strong{color:var(--stop)}
+.ack{display:flex;gap:8px;align-items:flex-start;flex-basis:100%;font-size:14px;color:var(--muted);max-width:44ch}.ack input{margin-top:4px;width:18px;height:18px}
+details.howto{background:var(--paper);border:1.5px solid var(--rule);border-radius:14px;padding:12px 18px;margin:0 0 22px}details.howto summary{font-weight:600;cursor:pointer}
+details.howto ol{margin:10px 0 4px;padding-left:20px}details.howto li{margin:0 0 6px}details.howto code{font-size:14px;word-break:break-all}
+.nw{white-space:nowrap}
 .load{background:var(--paper);border:1.5px dashed var(--rule);border-radius:14px;padding:16px 18px}
 @media (max-width:560px){h1{font-size:27px}.slip{grid-template-columns:1fr}.amt{text-align:left}}
 @media (prefers-reduced-motion:no-preference){.run.done{transition:border-color .4s}.run.done{border-color:var(--ok)}}
@@ -45,169 +52,17 @@ h2{font-size:20px;margin:40px 0 4px}h2+p{color:var(--muted);margin:0 0 14px;font
 <body><main>
 <header><div class="brand">Clerk</div><div style="display:flex;gap:10px;align-items:center"><span class="net" id="net">Wallet not connected</span><button id="connect">Connect wallet</button></div></header>
 <h1 id="headline">Pay runs waiting for you</h1>
-<p class="lede">Your AI clerk read the invoices and staged these payments. It can't pay anything itself. Each payee below is the wallet the vendor registered on Aevum, and every number is shown in the invoice it came from.</p>
+<p class="lede">Your AI clerk read the invoices and staged these payments. It can't pay anything itself. Each payee below is the wallet the vendor registered on Aevum, and every number is shown in the invoice it came from (a line staged by a test script says so instead).</p>
+<details class="howto" id="howto"><summary>How to connect your wallet (owner only)</summary><ol>
+<li>Use a browser wallet such as MetaMask or Rabby, holding the key that signs for the owner's smart account (the Kernel account that owns PayRun).</li>
+<li>Press <strong>Connect wallet</strong>. If your wallet is on another network, the page asks it to switch to (or add) Aevum testnet: chain ID <code>44005</code>, RPC <code>https://rpc-test.qday.info</code>, currency tQDAY, explorer <code>https://explorer-test.qday.info</code>.</li>
+<li>The top bar then says whether this key is the owner's signer. Any other key can look, but its approvals fail on chain.</li>
+<li>Approve and pay, Confirm payee or Reject: your wallet asks you to sign one UserOperation for the smart account, then to send it (a little tQDAY for gas). Each result links to the explorer.</li>
+<li>A held payment: first call the vendor on a number you already had, tick the box, then Confirm payee. After that the run can be approved and paid.</li>
+</ol><p class="status">The page never holds a key and only sends to Clerk's two PayRun contracts. Without a wallet it is read-only.</p></details>
 <div id="loader" class="load" hidden><label for="file">Open a pay-run report (report.json from the clerk)</label><br><input id="file" type="file" accept="application/json"></div>
 <section id="runs"></section>
-<h2>Needs your check</h2><p>The clerk did not stage these. Look at them yourself before paying anything.</p><section id="hold"></section>
+<h2>Needs your check</h2><p>The clerk did not stage these, so nothing can pay them from here. If one is genuine, check it with the vendor on a number you already have and ask them to send it again under their registered name.</p><section id="hold"></section>
 <h2>Stopped</h2><p>These failed a rule the clerk can't override.</p><section id="stop"></section>
 </main>
-<script type="module">
-import { createWalletClient, createPublicClient, custom, http, parseAbi, formatUnits, encodeFunctionData, encodePacked } from './vendor/viem-2.21.0.js';   // vendored (esm.sh viem@2.21.0 es2022 bundle), sha256 in README
-const ABI = parseAbi([
-  'function runs(uint256) view returns (uint8 status, address stagedBy, uint64 stagedAt, uint128 total, uint32 lineCount)',
-  'function execute(uint256 runId)', 'function reject(uint256 runId, string reason)', 'function owner() view returns (address)',
-  // PayRunV2 payee-change hold (the v1 PayRun has none of these; the page then behaves as before)
-  'function canExecute(uint256 runId) view returns (bool ok, uint256 line, uint8 reason, uint64 releaseAt)',
-  'function lineOf(uint256 runId, uint256 i) view returns ((uint256 payeeAgentId, address payee, uint128 amount, bytes32 invoiceHash, bytes32 invoiceRef))',
-  'function confirmPayee(uint256 agentId, address wallet)']);
-const BLOCKED_TOPIC = '0xeccfe563df0552cce6bb5602228af8212d6b0abec81deed0180430dbc095511e'; // PaymentBlocked(uint256,uint256,uint256,address,uint8,uint64)
-const when = (t) => new Date(Number(t) * 1000).toLocaleString('en', { dateStyle: 'medium', timeStyle: 'short' });
-// Why PayRunV2 won't pay a run yet. Read from the contract, never from the report.
-async function holdOf(id, items) {
-  let r; try { r = await pub().readContract({ address: report.payrun, abi: ABI, functionName: 'canExecute', args: [BigInt(id)] }); } catch { return null; }
-  const [ok, line, reason, releaseAt] = r; if (ok || ![1, 2, 3].includes(Number(reason))) return null;
-  const l = await pub().readContract({ address: report.payrun, abi: ABI, functionName: 'lineOf', args: [BigInt(id), line] });
-  const agent = String(l.payeeAgentId), payee = l.payee;
-  const name = items.find((i) => String(i.agent_id) === agent)?.registered_name || 'agent #' + agent;
-  const text = Number(reason) === 1
-    ? `<strong>Payment held.</strong> ${esc(name)}'s wallet ${esc(short(payee))} is new or just changed. The hold ends ${esc(when(releaseAt))}. Check the new details with the vendor on a number you already have (not one from the invoice), then confirm the payee.`
-    : Number(reason) === 2
-    ? `<strong>Payment held.</strong> This run was staged while ${esc(name)}'s wallet ${esc(short(payee))} was still on hold, so waiting won't release it. Confirm the wallet with the vendor first.`
-    : `<strong>Refused.</strong> ${esc(name)}'s registered wallet changed after this run was staged. Reject it; the clerk stages it again and the new wallet is held.`;
-  return { reason: Number(reason), agent, payee, name, text };
-}
-// The owner may be an ERC-4337 smart account (Kernel v3.1 on Aevum): then the connected wallet is its signing key, signs a
-// UserOperation, and submits it to Aevum's EntryPoint v0.7 itself.
-const EP = '0x0000000071727De22E5E9d8BAf0edAc6f37da032';
-const OP = '(address sender,uint256 nonce,bytes initCode,bytes callData,bytes32 accountGasLimits,uint256 preVerificationGas,bytes32 gasFees,bytes paymasterAndData,bytes signature)';
-const EP_ABI = parseAbi([`function getUserOpHash(${OP} op) view returns (bytes32)`, 'function getNonce(address sender, uint192 key) view returns (uint256)',
-  `function handleOps(${OP}[] ops, address beneficiary)`]);
-const KERNEL_ABI = parseAbi(['function execute(bytes32 mode, bytes executionCalldata)']);
-const OP_EVENT = '0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f'; // UserOperationEvent
-async function viaSmartAccount(owner, inner) {
-  const callData = encodeFunctionData({ abi: KERNEL_ABI, functionName: 'execute', args: ['0x' + '00'.repeat(32),
-    encodePacked(['address', 'uint256', 'bytes'], [report.payrun, 0n, inner])] });
-  const nonce = await pub().readContract({ address: EP, abi: EP_ABI, functionName: 'getNonce', args: [owner, 0n] });
-  const op = { sender: owner, nonce, initCode: '0x', callData, accountGasLimits: encodePacked(['uint128', 'uint128'], [600000n, 600000n]),
-    preVerificationGas: 60000n, gasFees: encodePacked(['uint128', 'uint128'], [1000000000n, 1000000000n]), paymasterAndData: '0x', signature: '0x' };
-  const userOpHash = await pub().readContract({ address: EP, abi: EP_ABI, functionName: 'getUserOpHash', args: [op] });
-  op.signature = await wallet.signMessage({ account, message: { raw: userOpHash } });
-  const hash = await wallet.writeContract({ account, chain: null, address: EP, abi: EP_ABI, functionName: 'handleOps', args: [[op], account], type: 'legacy' });
-  const rc = await pub().waitForTransactionReceipt({ hash });
-  const ev = rc.logs.find((l) => l.topics[0] === OP_EVENT);
-  if (!ev || BigInt('0x' + ev.data.slice(2 + 64, 2 + 128)) !== 1n) throw new Error('the smart account refused the call (nothing was paid)');
-  return hash;
-}
-const CHAINS = { 44005: { name: 'Aevum testnet', rpc: 'https://rpc-test.qday.info', explorer: 'https://explorer-test.qday.info' },
-                 440050: { name: 'Aevum fork (local)', rpc: 'http://127.0.0.1:8555', explorer: null } };
-const STATUS = ['', 'Waiting for your approval', 'Paid', 'Rejected'];
-const $ = (s) => document.querySelector(s);
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '';
-const money = (u) => Number(formatUnits(BigInt(u), 6)).toLocaleString('en', { minimumFractionDigits: 2 }) + ' tUSD8';
-// The only PayRun this hosted page will send approvals to (Aevum testnet). A report for any other contract is shown read-only.
-const PINNED = { 44005: '0x2EE29a167CDDb964aAB9C899ea9Ae89847e3Da98' };
-const LOCAL = ['localhost', '127.0.0.1', ''].includes(location.hostname);
-const isInt = (v) => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) || (typeof v === 'string' && /^\d{1,18}$/.test(v));
-// Reports are data from outside: keep only well-formed fields, so nothing from a report can become markup or a contract address unchecked.
-function clean(r) {
-  if (!r || typeof r !== 'object' || !/^0x[0-9a-fA-F]{40}$/.test(String(r.payrun))) throw new Error('not a Clerk pay-run report');
-  const items = (Array.isArray(r.items) ? r.items : []).filter((i) => i && typeof i === 'object' && i.proposed && typeof i.proposed === 'object'
-    && (i.run_id == null || (isInt(i.run_id) && Number(i.run_id) > 0)) && (i.agent_id == null || isInt(i.agent_id)) && isInt(i.units ?? 0))
-    .map((i) => ({ ...i, run_id: i.run_id == null ? null : Number(i.run_id), agent_id: i.agent_id == null ? null : Number(i.agent_id), units: String(i.units ?? 0) }));
-  return { payrun: r.payrun, items };
-}
-const trusted = () => LOCAL || report.payrun.toLowerCase() === (PINNED[chainId] || '').toLowerCase();
-const notes = {};   // runId -> what happened to the owner's last action (kept across re-renders)
-let report, wallet, account, chainId = Number(new URLSearchParams(location.search).get('chain') || 44005);
-const pub = () => createPublicClient({ transport: http(CHAINS[chainId].rpc) });
-
-function snippet(text, value) {
-  if (!text) return '<div class="empty">Not found in the invoice</div>';
-  const v = String(value ?? ''); const i = text.toLowerCase().indexOf(v.toLowerCase());
-  return '<div>' + (v && i >= 0 ? esc(text.slice(0, i)) + '<mark>' + esc(text.slice(i, i + v.length)) + '</mark>' + esc(text.slice(i + v.length)) : esc(text)) + '</div>';
-}
-function slip(it, hold) {
-  const p = it.proposed, e = it.evidence || {};
-  return `<div class="slip"><div class="who">${esc(it.registered_name)}<span class="id">agent #${esc(it.agent_id)}</span></div>
-    <div class="amt">${money(it.units)}</div>
-    <div class="meta">${hold && String(it.agent_id) === hold.agent ? '<span class="verdict v-hold">Registered wallet, on hold</span>' : '<span class="verdict v-ok">Payee confirmed</span>'}Invoice ${esc(p.reference)}, due ${esc(p.due_date)}, to ${esc(short(p.wallet))}</div>
-    <div class="src">${snippet(e.amount, p.amount)}${snippet(e.reference, p.reference)}${snippet(e.due_date, p.due_date)}</div></div>`;
-}
-async function render() {
-  const items = report.items || [];
-  const byRun = {};
-  for (const it of items) if (it.run_id) (byRun[it.run_id] ||= []).push(it);
-  const ids = Object.keys(byRun);
-  const parts = []; let waiting = 0;
-  for (const id of ids) {
-    let st = 1;
-    try { st = Number((await pub().readContract({ address: report.payrun, abi: ABI, functionName: 'runs', args: [BigInt(id)] }))[0]); } catch {}
-    if (st === 1) waiting++;
-    const hold = st === 1 ? await holdOf(id, byRun[id]) : null;
-    const total = byRun[id].reduce((s, i) => s + BigInt(i.units), 0n);
-    parts.push(`<article class="run ${st === 2 ? 'done' : ''}" data-run="${id}"><div class="runhead"><div><div class="status">Run ${id}: ${STATUS[st] || 'Unknown'}</div>
-      <div class="total">${money(total)}<small>${byRun[id].length} invoice${byRun[id].length > 1 ? 's' : ''}</small></div></div>
-      <div class="actions">${st === 1 && trusted() ? (hold ? (hold.reason !== 3 ? `<button data-act="confirm" data-run="${id}" data-agent="${esc(hold.agent)}" data-wallet="${esc(hold.payee)}" data-name="${esc(hold.name)}">Confirm payee</button>` : '')
-        : `<button class="pay" data-act="execute" data-run="${id}">Approve and pay</button>`) + `<button data-act="reject" data-run="${id}">Reject</button>` : ''}</div></div>
-      ${hold ? `<div class="slip"><div class="held" role="alert">${hold.text}</div></div>` : ''}${byRun[id].map((it) => slip(it, hold)).join('')}<div class="slip status" id="tx-${id}" ${notes[id] ? '' : 'hidden'}>${notes[id] || ''}</div></article>`);
-  }
-  $('#headline').textContent = waiting === 0 ? (ids.length ? 'Nothing is waiting for you' : 'Nothing to approve')
-    : waiting === 1 ? 'One pay run is waiting for you' : `${waiting} pay runs are waiting for you`;
-  $('#runs').innerHTML = parts.join('') || '<p class="empty">The clerk staged nothing this time.</p>';
-  if (!trusted()) $('#runs').insertAdjacentHTML('afterbegin', '<p class="empty" role="alert">This report names a contract that is not Clerk\'s deployed PayRun, so it is shown read-only.</p>');
-  const other = (dec) => items.filter((i) => i.decision === dec || (dec === 'HOLD' && i.decision === 'PAYABLE' && i.skip && !i.run_id && i.skip.startsWith('over')));
-  const card = (i, cls, label) => `<div class="item"><span class="verdict ${cls}">${label}</span><strong>${esc(i.proposed.vendor || i.file)}</strong>
-    ${i.proposed.amount ? ' · ' + esc(i.proposed.amount) + ' ' + esc(i.proposed.currency || '') : ''}<ul>${[...(i.reasons || []), ...(i.warnings || []), ...(i.skip ? [i.skip] : [])].map((r) => `<li>${esc(r)}</li>`).join('')}</ul></div>`;
-  $('#hold').innerHTML = other('HOLD').map((i) => card(i, 'v-hold', i.decision === 'PAYABLE' ? 'Over the clerk\'s limit' : i.cop === 'CLOSE_MATCH' ? 'Name is close, not exact' : i.cop === 'NO_MATCH' ? 'Unknown vendor' : 'Not found in the invoice')).join('') || '<p class="empty">Nothing waiting.</p>';
-  $('#stop').innerHTML = other('BLOCK').map((i) => card(i, 'v-stop', 'Stopped')).join('') || '<p class="empty">Nothing stopped.</p>';
-}
-async function connect() {
-  if (!window.ethereum) { $('#net').textContent = 'No browser wallet found'; return; }
-  wallet = createWalletClient({ transport: custom(window.ethereum) });
-  [account] = await wallet.requestAddresses();
-  chainId = await wallet.getChainId();
-  $('#net').textContent = (CHAINS[chainId]?.name || `Chain ${chainId} (switch to Aevum testnet)`) + ', ' + short(account);
-  $('#connect').textContent = 'Connected';
-}
-document.addEventListener('click', async (ev) => {
-  const b = ev.target.closest('button[data-act]'); if (!b || !report || !trusted()) return;
-  if (!wallet) await connect(); if (!wallet) return;
-  const id = BigInt(b.dataset.run), out = $('#tx-' + b.dataset.run); out.hidden = false;
-  try {
-    let fn = b.dataset.act, args;
-    if (fn === 'confirm') {
-      if (!/^\d{1,18}$/.test(b.dataset.agent || '') || !/^0x[0-9a-fA-F]{40}$/.test(b.dataset.wallet || '')) throw new Error('bad payee data');
-      if (!confirm(`Confirm that ${b.dataset.wallet} is ${b.dataset.name}'s wallet? Only after you checked it with the vendor on a known channel.`)) { out.hidden = true; return; }
-      fn = 'confirmPayee'; args = [BigInt(b.dataset.agent), b.dataset.wallet];
-    } else args = fn === 'reject' ? [id, prompt('Why are you rejecting this run?') || 'rejected by the owner'] : [id];
-    out.textContent = fn === 'execute' ? 'Paying… confirm in your wallet.' : fn === 'confirmPayee' ? 'Confirming the payee… confirm in your wallet.' : 'Rejecting… confirm in your wallet.';
-    const owner = await pub().readContract({ address: report.payrun, abi: ABI, functionName: 'owner' });
-    let hash;
-    if ((await pub().getBytecode({ address: owner }))?.length > 2) {   // smart-account owner: sign a UserOperation
-      out.textContent += ' (signing for the smart account ' + short(owner) + ')';
-      hash = await viaSmartAccount(owner, encodeFunctionData({ abi: ABI, functionName: fn, args }));
-    } else {
-      hash = await wallet.writeContract({ account, chain: null, address: report.payrun, abi: ABI, functionName: fn, args, type: 'legacy' });
-      await pub().waitForTransactionReceipt({ hash });
-    }
-    const ex = CHAINS[chainId]?.explorer;
-    const rc = await pub().getTransactionReceipt({ hash });
-    const blocked = rc.logs.some((l) => l.address.toLowerCase() === report.payrun.toLowerCase() && l.topics[0] === BLOCKED_TOPIC);
-    notes[b.dataset.run] = (fn === 'execute' ? (blocked ? 'Not paid: the payee hold blocked it. Nothing moved. ' : 'Paid. ')
-      : fn === 'confirmPayee' ? 'Payee confirmed (logged on chain). ' : 'Rejected. ') + (ex ? `<a href="${ex}/tx/${hash}" target="_blank" rel="noopener">View transaction</a>` : 'Transaction ' + esc(hash));
-    await render();
-  } catch (e) { out.textContent = 'Not sent: ' + (e.shortMessage || e.message || e); }
-});
-$('#connect').onclick = connect;
-$('#file').onchange = async (e) => { try { report = clean(JSON.parse(await e.target.files[0].text())); $('#loader').hidden = true; render(); } catch (err) { $('#headline').textContent = 'That file is not a Clerk report'; } };
-// ?report= may only name a file on this same site (no other host): a link can't make this page load someone else's report.
-function sameSite(src) { try { const u = new URL(src, location.href); return u.origin === location.origin ? u.href : null; } catch { return null; } }
-const src = new URLSearchParams(location.search).get('report');
-async function load(url) { const r = await fetch(url, { credentials: 'omit' }); if (!r.ok) throw new Error('report not found'); return clean(await r.json()); }
-try {
-  if (src) { const u = sameSite(src); if (!u) throw new Error('Reports can only be opened from this site'); report = await load(u); }
-  else report = await load('report.json').catch(() => null);   // hosted: the latest testnet run, next to this page
-  if (report) render(); else $('#loader').hidden = false;
-} catch (err) { $('#headline').textContent = String(err.message); $('#loader').hidden = false; }
-</script></body></html>
+<script type="module" src="app.js"></script></body></html>

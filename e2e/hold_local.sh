@@ -100,6 +100,7 @@ if [ "${PAGE:-0}" = 1 ]; then
   [ $prc = 0 ] || fail "page check"
   [ "$(bal $ACME_NEW)" = 50000000 ] || fail "page did not pay Acme's confirmed new wallet"
   [ "$(bal $GLOBEX)" = 0 ] || fail "Globex paid without confirmation"
-  echo "page: hold shown, payee confirmed and run 5 paid from the page; Globex still held"
+  [ "$(status 3)" = 3 ] || fail "run 3 was not rejected from the page"
+  echo "page: hold shown and counted, payee confirmed (after the check box) and run 5 paid from the page; Globex run rejected in one click, never paid"
 fi
 echo "HOLD E2E OK (PayRunV2 $PAYRUN)"

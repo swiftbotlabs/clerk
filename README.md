@@ -42,7 +42,9 @@ flowchart LR
 | `e2e/demo_day_check.sh` | Read-only pre-flight for a live testnet demo: RPC, treasury, gas, sessions, page, bundler, video |
 | `e2e/adversarial/` | The adversarial-invoice eval: corpus generator (`gen.py`), local-chain runner (`run_eval.py`), table (`report.py`), `run.sh` |
 | `agent/reconcile.py` | `Paid` events in 1,000-block chunks, matched to `ledger.csv`; on PayRunV2 also `HELD` rows and the payee audit trail |
-| `web/index.html` | Approval page: each staged line with the invoice line behind every number, held and stopped invoices, approve or reject from the owner's wallet |
+| `web/index.html`, `web/app.js` | Approval page: each staged line with the invoice line behind every number; runs on both PayRuns; a held payment gets Confirm payee (after the owner ticks that they checked the wallet with the vendor) and one-click Reject; the headline counts every run, hold and invoice that needs the owner; held and stopped invoices; a short wallet how-to. Approvals are UserOperations from the owner's Kernel account. Script loaded from the page's own origin under a strict CSP |
+| `e2e/report_v2.py` | Reads every PayRunV2 run from the chain into `docs/report-v2.json` for the page (read-only) |
+| `e2e/test_prerender.py`, `e2e/page_fork.sh`, `e2e/page_controls.sh` | Page tests: server render with a fake chain (6 unit tests); the built page on a local fork of testnet confirming, paying and rejecting through the owner's real Kernel account, plus a not-the-signer control; 10 planted mutants, one per page fix, each must fail its test |
 | `e2e/run_fork.sh` | The whole flow on a local fork of Aevum testnet (real registry, real tUSD8) |
 | `e2e/hold_local.sh` | PayRunV2's hold end to end on a local chain: change, block, A to B to A, reconcile, and (`PAGE=1`) confirm and pay from the approval page |
 | `e2e/run_testnet.sh`, `e2e/deploy_v2_testnet.sh`, `e2e/block_v2_testnet.sh` | The testnet runs behind the table below: the paid runs, PayRunV2's deploy with a hold and an early release, and a payment blocked by the hold (owner UserOperations through QDay's bundler) |
@@ -194,6 +196,8 @@ cd ../../e2e && ./run_fork.sh                                 # full flow on a l
 KERNEL=1 ./run_fork.sh                                        # same, the owner + treasury as a Kernel v3.1 smart account (UserOperations)
 EXTRACTOR=llm ./run_fork.sh                                   # same, with the LLM extractor (needs CLERK_LLM_URL)
 PAGE=1 ./hold_local.sh                                        # PayRunV2 hold on a local chain, no network (PAGE=1 needs playwright)
+cd .. && python3 -m unittest e2e/test_prerender.py           # approval page server render (fake chain)
+KEYS=<testnet keys json> e2e/page_fork.sh                     # approval page vs a local fork of testnet (Kernel UserOperations; no testnet sends)
 ```
 
 Environment: `AEVUM_RPC` (default `https://rpc-test.qday.info`), `AEVUM_REGISTRY` (default the testnet registry), `PAYRUN` (deployed address),
@@ -222,7 +226,7 @@ Environment: `AEVUM_RPC` (default `https://rpc-test.qday.info`), `AEVUM_REGISTRY
 
 Live refusals on testnet (eth_call against the deployed PayRun, 20 Nov): the clerk's key calling `execute(3)` -> `NotOwner`; the clerk staging 5.00 -> `RunCapExceeded(5000000, 2500000)`; the clerk staging Acme's agentId with the attacker's wallet -> `PayeeNotRegistered`; a stranger staging -> `NoSession`; the owner's bare key (not the smart account) -> `NotOwner`; the smart account paying run 3 again -> `NotStaged(3)`.
 
-Approval page: https://clerk.swiftbotlab.workers.dev/ (the latest testnet run; connect a wallet that owns PayRun to approve). It only sends approvals to the PayRun above, only opens reports from its own site, and loads viem from a vendored copy (`docs/vendor/viem-2.21.0.js`, sha256 `9186bb2d03bf7806da094a3686ef5606e2fb74acbdd04d01806e67aed8706bfb`, from esm.sh viem@2.21.0 es2022 bundle).
+Approval page: https://clerk.swiftbotlab.workers.dev/ (the latest testnet run plus every PayRunV2 run, read from the chain; connect the key that signs for the owner's Kernel account to approve, confirm a held payee or reject; the page's "How to connect your wallet" has the network settings). It only sends approvals to the two PayRun contracts above, only opens reports from its own site, runs under a strict Content-Security-Policy (no inline script), and loads viem from a vendored copy (`docs/vendor/viem-2.21.0.js`, sha256 `9186bb2d03bf7806da094a3686ef5606e2fb74acbdd04d01806e67aed8706bfb`, from esm.sh viem@2.21.0 es2022 bundle).
 
 **Verified source.** For most of the build the testnet explorer's verifier listed no compiler versions, so `contracts/script/match_onchain.py` does the check:
 on 20 Nov it compiled `src/PayRun.sol` (solc 0.8.34, Shanghai, 200 optimizer runs), filled the two immutables with the values the deployed

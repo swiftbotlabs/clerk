@@ -1,0 +1,37 @@
+# Clerk public sandbox: try to make Clerk pay the wrong payee
+
+Live: https://clerk-sandbox.swiftbotlab.workers.dev/ · its own PayRunV2 on Aevum testnet:
+[`0x8034c01b…`](https://explorer-test.qday.info/address/0x8034c01ba98d882abd30118235d648183d3fae52), with three vendors registered in the
+real ERC-8004 registry.
+
+Pick an attack, optionally paste your own invoice text, and the sandbox sends the attempt as a real Aevum testnet transaction, then shows
+the contract's answer with its explorer link.
+
+## The 14 attack kinds (and the control)
+Payee swap ("we have new bank details"), look-alike vendor, prompt injection, over the run cap, split to dodge the day cap, re-sending a
+paid invoice, the clerk's key calling `execute`, a revoked key, an expired key, a key with no session, the vendor's wallet hijacked after
+staging, a brand-new payee with no owner confirmation, a duplicate line in one run, and a zero amount. A genuine invoice to the registered
+wallet is the control and is accepted.
+
+## Seeded on 25 Nov through the public page
+15 attempts, 14 refused on chain with the expected error (PayeeNotRegistered, RunCapExceeded, DayCapExceeded, AlreadyPaid, NotOwner,
+SessionRevokedErr, SessionExpired, NoSession, AlreadyStaged, ZeroAmount; the hijack and the new payee are executed by the owner and the
+contract emits `PaymentBlocked` instead of paying), the genuine control accepted, 0 faults, the 0.09 test tUSD8 treasury untouched.
+Example refusal: [PayeeNotRegistered](https://explorer-test.qday.info/tx/0x69b797d7c6f63532cc0ef4dcf6aa22ae6740006e654d5d4d6eaa90b41ec05dfb).
+The deployment record is `sandbox-testnet.json`.
+
+## Safety
+- Visitor text never reaches the chain: the on-chain reference is always `SBX-n`, and an address you paste is replaced by a fresh random
+  one. The owner's key only executes a run staged in the same attempt, and only after a simulation shows it would pay nothing.
+- Abuse limits: Turnstile, one attempt a minute per visitor, hourly and daily caps, a kill switch, and a read-only watcher
+  (`watch_paid.mjs`) that alerts on any `Paid` event from the sandbox contract.
+- Two security reviews before launch; 35 deliberately broken builds each fail the tests (`worker/scripts/controls.sh`).
+
+## Layout
+| Path | What it does |
+|---|---|
+| `lib/` | JS port of the clerk's checks (parity-tested against `agent/check.py`) and the attack library |
+| `worker/` | Cloudflare Worker + one Durable Object (serialised sends, SQLite log and counts, rate limits), server-rendered page |
+| `deploy.mjs` | Idempotent deploy of the sandbox contracts and vendors (testnet or a local fork) |
+| `watch_paid.mjs` | Read-only watcher: one log line per check, alerts on any `Paid` other than the seed run |
+| `test/` | Unit, fork and HTTP tests (HTTP tests run the Worker locally against an anvil fork) |
