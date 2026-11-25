@@ -7,7 +7,7 @@
 // Usage: NODE_PATH=/data/motion/node_modules CHROME_BIN=/usr/bin/google-chrome OUT=dir PORT=8098 node e2e/video/sim_page_check.cjs
 const { chromium } = require('playwright');
 const OUT = process.env.OUT || '.', PORT = process.env.PORT || '8098';
-const URL = `http://127.0.0.1:${PORT}/index.html`;
+const URL = process.env.PAGE_URL || `http://127.0.0.1:${PORT}/index.html`;   // PAGE_URL: e.g. the live page (reads only)
 const READS = new Set(['eth_call', 'eth_getBlockByNumber', 'eth_chainId', 'eth_blockNumber', 'eth_getCode', 'eth_getLogs', 'eth_getBalance', 'eth_getTransactionReceipt']);
 let failed = 0;
 const fail = (m) => { console.log('SIM FAIL: ' + m); failed++; };
