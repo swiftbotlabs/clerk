@@ -20,7 +20,7 @@ export const MENU = {
   new_payee_unconfirmed: ['A vendor points its registry entry at a brand-new wallet; a run to it is staged and the owner pays.', 'Not paid: a new wallet waits out a 3-day hold unless the owner confirms it.'],
   duplicate_in_run: ['One run lists the same invoice twice.', 'Refused: the invoice is already in the run.'],
   zero_amount: ['A 0.00 line, to probe the checks.', 'Refused: zero amounts are not staged.'],
-  genuine: ['Control: a normal invoice to the vendor\'s registered wallet.', 'Accepted and staged (never paid here), so you can see the check is about the payee.'],
+  genuine: ['A normal invoice to the vendor\'s registered wallet.', 'Accepted and staged (never paid here), so you can see the check is about the payee.'],
 };
 
 export const ERRORS = {
@@ -84,7 +84,7 @@ a{color:var(--focus)}code{font:13px ui-monospace,SFMono-Regular,Menlo,monospace}
 .stat b{display:block;font-size:26px;letter-spacing:-.01em}.stat span{font-size:14px;color:var(--muted)}
 .item{background:var(--paper);border:1.5px solid var(--rule);border-radius:14px;padding:14px 18px;margin:0 0 10px}
 .verdict{display:inline-block;font-size:13px;font-weight:600;border-radius:999px;padding:2px 10px;margin-right:6px;white-space:nowrap}
-.v-ok{background:var(--ok-bg);color:var(--ok)}.v-hold{background:var(--hold-bg);color:var(--hold)}.v-stop{background:var(--stop-bg);color:var(--stop)}
+.v-ok{background:var(--ok-bg);color:var(--ok)}.v-hold{background:var(--hold-bg);color:var(--hold)}.v-stop{background:var(--stop-bg);color:var(--stop)}.v-n{background:var(--bg);color:var(--muted)}
 fieldset{border:0;margin:0;padding:0}
 .menu label{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;background:var(--paper);border:1.5px solid var(--rule);border-radius:12px;padding:12px 14px;margin:0 0 8px;cursor:pointer}
 .menu label:has(input:checked){border-color:var(--ink)}
@@ -109,7 +109,7 @@ td.num,th.num{text-align:right}tr:last-child td{border-bottom:0}
 .result{border-width:2px}.result.ok{border-color:var(--ok)}.result.stop{border-color:var(--stop)}
 .headline{font-size:22px;font-weight:700;margin:6px 0}
 footer{margin-top:48px;color:var(--muted);font-size:14px}
-@media (max-width:560px){h1{font-size:27px}.stats{grid-template-columns:1fr}.stat b{font-size:22px}th.hide,td.hide{display:none}}`;
+@media (max-width:560px){h1{font-size:27px}.stats{gap:8px}.stat{padding:10px 10px}.stat b{font-size:19px}.stat span{font-size:13px;line-height:1.3}th.hide,td.hide{display:none}}`;
 
 function shell(title, body, { turnstile = false, cfg } = {}) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -140,12 +140,12 @@ export function renderHome({ state, cfg, sitekey, limits }) {
   const tre = state.treasury;
   const menu = ORDER.map((k, i) => {
     const K = KINDS[k], [what, chain] = MENU[k];
-    return `<label><input type="radio" name="kind" value="${k}"${i === 0 ? ' checked' : ''}><span class="t"><span class="n">${K.n ? K.n + '.' : 'Control.'}</span>${esc(K.title.replace(/^Control: /, ''))}</span>
+    return `<label><input type="radio" name="kind" value="${k}"${i === 0 ? ' checked' : ''}><span class="t"><span class="n">${K.n ? K.n + '.' : 'Control.'}</span>${esc(K.title.replace(/^Control: a/, 'A'))}</span>
 <span class="d">${esc(what)} <strong>${esc(chain)}</strong></span></label>`;
   }).join('\n');
   const countRows = ORDER.map((k) => {
     const r = c[k] || { attempts: 0, refused: 0, accepted: 0, faults: 0 };
-    return `<tr><td>${KINDS[k].n || 'Control'}. ${esc(KINDS[k].title.replace(/^Control: /, ''))}</td><td class="num">${r.attempts}</td><td class="num">${k === 'genuine' ? r.accepted + ' accepted' : r.refused}</td><td class="num hide">${r.faults}</td></tr>`;
+    return `<tr><td>${KINDS[k].n || 'Control'}. ${esc(KINDS[k].title.replace(/^Control: a/, 'A'))}</td><td class="num">${r.attempts}</td><td class="num">${k === 'genuine' ? r.accepted + ' accepted' : r.refused}</td><td class="num hide">${r.faults}</td></tr>`;
   }).join('');
   const off = state.off;
   const form = off
@@ -192,8 +192,8 @@ function stepsHtml(cfg, rec) {
     if (!s.sent) res = `<span class="verdict v-stop">not sent</span>${esc(s.simulated || '')}`;
     else if (s.status === 'reverted') res = `<span class="verdict v-ok">reverted</span><code>${esc(s.error)}</code> ${esc(ERRORS[s.error] || '')}`;
     else if (s.error?.startsWith('PaymentBlocked')) res = `<span class="verdict v-ok">nothing paid</span><code>${esc(s.error)}</code>`;
-    else res = `<span class="verdict v-hold">${esc(s.status || 'sent')}</span>${esc(s.note || '')}`;
-    return `<li>${esc(s.step)} <span class="muted">(${esc(String(s.from).replace('_', ' '))} key)</span><br>${res}${s.hash ? ' · ' + txLink(cfg, s.hash) : ''}</li>`;
+    else res = `<span class="verdict v-n">sent, ${esc(s.status === 'success' ? 'went through' : s.status || '')}</span>${esc(s.note || '')}`;
+    return `<li>${esc(String(s.step).charAt(0).toUpperCase() + String(s.step).slice(1))} <span class="muted">(${esc(String(s.from).replace('_', ' '))} key)</span><br>${res}${s.hash ? ' · ' + txLink(cfg, s.hash) : ''}</li>`;
   }).join('')}</ol>`;
 }
 

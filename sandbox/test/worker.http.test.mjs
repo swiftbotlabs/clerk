@@ -162,7 +162,7 @@ test('sandbox Worker over HTTP', { skip, timeout: 1_800_000 }, async (t) => {
         assert.equal(new Set(blocks).size, blocks.length, 'each attempt mined in its own block (serialised)');
       });
 
-      await t1.test('log keeps the last 100; counters keep everything', async () => {
+      await t1.test('log keeps the last 100; counters keep everything', { skip: process.env.SKIP_TRIM === '1' }, async () => {
         const before = await state(S.base);
         const total0 = Object.values(before.counts).reduce((a, c) => a + c.attempts, 0);
         const need = 101 - before.attempts.length;
