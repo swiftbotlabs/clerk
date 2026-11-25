@@ -2,11 +2,14 @@
 //   GET  /               page (server-rendered; readable with JS off)      GET /log        last 100 attempts
 //   GET  /attempt/:id    one attempt                                        GET /api/state  same data as JSON (same-origin; no CORS)
 //   GET  /healthz        config + chain + key gas floors (200 ok / 503)     POST /attack    {kind, text<=4KB, cf-turnstile-response}
+//   GET  /extract        extractor demo form                                POST /extract   {text<=4KB, cf-turnstile-response}: the model
+//                        proposes a line, check.mjs decides; NEVER sends a transaction (worker/src/extract.mjs)
 // Order of checks on POST: kill switch -> origin -> content type + body size -> fields -> Turnstile -> Durable Object
 // (kill switch again, rate limits, one-at-a-time queue, chain sends). No CORS headers are ever sent.
 import { KINDS } from '../../lib/sandbox.mjs';
 import { renderHome, renderAttempt, renderLog, renderMessage } from './page.mjs';
-import { limitsFrom, MAX_BODY, MAX_TEXT, ipKey, net48Key, turnstileOk, turnstileConfigError, demoOk, publicConfigFrom } from './limits.mjs';
+import { limitsFrom, MAX_BODY, MAX_TEXT, ipKey, net48Key, turnstileOk, turnstileConfigError, demoOk, publicConfigFrom, parseConfig, readCapped } from './limits.mjs';
+import { handleExtract, renderExtract, sampleText, extractLimitsFrom, vendorRegistry } from './extract.mjs';
 export { Sandbox } from './do.mjs';
 
 const CSP = "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; " +
@@ -36,6 +39,14 @@ const MESSAGES = {
   net_hour: ['Busy network', 'Your network block has used this hour\'s attempts. Try again later this hour.'],
   rate: ['Slow down', 'Too many requests from your network. Wait a minute.'],
   text: ['Too long', `The invoice text can be at most ${MAX_TEXT} characters.`],
+  xoff: ['Paused', 'The extractor demo is paused right now. The sandbox page and its log stay up.'],
+  empty: ['Nothing to read', 'Paste an invoice first.'],
+  chain: ['Chain unreachable', 'The vendor registry could not be read just now. Try again in a minute.'],
+  x_interval: ['One every few seconds', 'Wait a few seconds between tries.'],
+  x_day: ['Daily limit reached', 'You have used today\'s tries of the extractor demo. Come back tomorrow (UTC).'],
+  x_global_day: ['Daily limit reached', 'The extractor demo has used today\'s model allocation for everyone. Come back tomorrow (UTC).'],
+  x_net_hour: ['Busy network', 'Your network block has used this hour\'s tries. Try again later this hour.'],
+  x_demo_day: ['Demo budget used', 'The demo budget for today is used up.'],
 };
 
 function refuse(code, status, wantsJson, { retryAfter, cfg } = {}) {
@@ -43,25 +54,6 @@ function refuse(code, status, wantsJson, { retryAfter, cfg } = {}) {
   if (wantsJson) return json({ ok: false, code, retryAfter: retryAfter ?? null }, status, extra);
   const [t, m] = MESSAGES[code] || ['Error', 'Something went wrong.'];
   return html(renderMessage(t, m, { cfg }), status, extra);
-}
-
-/** Read at most `max` bytes of the body; null if it is larger (whatever Content-Length claims). */
-async function readCapped(req, max) {
-  const cl = Number(req.headers.get('content-length') || '0');
-  if (cl > max) return null;
-  if (!req.body) return '';
-  const reader = req.body.getReader();
-  const chunks = []; let n = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    n += value.byteLength;
-    if (n > max) { try { await reader.cancel(); } catch {} return null; }
-    chunks.push(value);
-  }
-  const buf = new Uint8Array(n); let o = 0;
-  for (const c of chunks) { buf.set(c, o); o += c.byteLength; }
-  return new TextDecoder('utf-8', { fatal: false }).decode(buf);
 }
 
 async function attack(req, env, stub, cfg) {
@@ -133,6 +125,11 @@ export default {
       if (method !== 'POST') return html(renderMessage('Not allowed', 'Use the form on the sandbox page.'), 405, { allow: 'POST' });
       return attack(req, env, stub, cfg);
     }
+    if (url.pathname === '/extract' && method === 'POST') {
+      let rpc = null; try { rpc = parseConfig(env).cfg.rpc; } catch {}
+      return handleExtract(req, env, { stub, cfg, html, refuse: (code, status, o = {}) => refuse(code, status, false, { ...o, cfg }),
+        registry: (c) => vendorRegistry(c, rpc) });
+    }
     if (method !== 'GET' && method !== 'HEAD') return html(renderMessage('Not allowed', 'Only GET here.'), 405, { allow: 'GET, HEAD' });
     if (url.pathname === '/healthz') {
       const h = { ...(await stub.health()), turnstileConfig: !turnstileConfigError(env) };
@@ -142,6 +139,12 @@ export default {
     if (!cfg) return html(renderMessage('Not configured', 'The sandbox is not configured.'), 503);
     let limits;
     try { limits = limitsFrom(env); } catch { return html(renderMessage('Not configured', 'Bad limit settings.'), 503); }
+    if (url.pathname === '/extract') {
+      let xl; try { xl = extractLimitsFrom(env); } catch { return html(renderMessage('Not configured', 'Bad limit settings.'), 503); }
+      const k = url.searchParams.get('sample') || 'payee_swap';
+      let acme = null; try { acme = (await vendorRegistry(cfg, parseConfig(env).cfg.rpc)).find(([n]) => n === cfg.vendors.acme.name)?.[1] || null; } catch {}
+      return html(renderExtract({ cfg, sitekey: env.TURNSTILE_SITEKEY || '', text: sampleText(k, cfg, acme), off: env.SANDBOX_OFF === '1' || env.EXTRACT_OFF === '1', limits: xl }));
+    }
     if (url.pathname === '/') return cachedPage('/', async () => renderHome({ state: await stub.state({ limit: 25 }), cfg, sitekey: env.TURNSTILE_SITEKEY || '', limits }));
     if (url.pathname === '/log') return cachedPage('/log', async () => renderLog({ state: await stub.state({ limit: 100 }), cfg }));
     // R2-2: /api/state shares the 5 s cache (dropped by this isolate after each finished attack)

@@ -84,7 +84,7 @@ export function turnstileConfigError(env) {
 
 /** Turnstile siteverify. Fails closed on anything but success with action 'attack' and (outside dev) the expected hostname.
  *  In dev with Cloudflare's always-pass TEST secret the action/hostname are not echoed back, so only success is required there. */
-export async function turnstileOk(env, token, ip, fetchImpl = fetch) {
+export async function turnstileOk(env, token, ip, fetchImpl = fetch, action = 'attack') {
   if (typeof token !== 'string' || token.length < 1 || token.length > MAX_TOKEN || !env.TURNSTILE_SECRET) return false;
   if (turnstileConfigError(env)) return false;
   const form = new FormData();
@@ -101,7 +101,7 @@ export async function turnstileOk(env, token, ip, fetchImpl = fetch) {
     const d = await r.json();
     if (d.success !== true) return false;
     const devTest = env.SANDBOX_DEV === '1' && TEST_KEY.test(env.TURNSTILE_SECRET);
-    if (!devTest && d.action !== 'attack') return false;
+    if (!devTest && d.action !== action) return false;
     if (!devTest && d.hostname !== env.TURNSTILE_HOSTNAME) return false;
     return true;
   } catch { return false; }
@@ -125,4 +125,23 @@ export function publicConfigFrom(env) {
     return { network: c.network, explorer: c.explorer, payrun: c.payrun, registry: c.registry, treasury: c.treasury, treasuryStart: c.treasuryStart || null,
       token: c.token, vendors: c.vendors, addresses: c.addresses, seed: c.seed || {} };
   } catch { return null; }
+}
+
+/** Read at most `max` bytes of the body; null if it is larger (whatever Content-Length claims). */
+export async function readCapped(req, max) {
+  const cl = Number(req.headers.get('content-length') || '0');
+  if (cl > max) return null;
+  if (!req.body) return '';
+  const reader = req.body.getReader();
+  const chunks = []; let n = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    n += value.byteLength;
+    if (n > max) { try { await reader.cancel(); } catch {} return null; }
+    chunks.push(value);
+  }
+  const buf = new Uint8Array(n); let o = 0;
+  for (const c of chunks) { buf.set(c, o); o += c.byteLength; }
+  return new TextDecoder('utf-8', { fatal: false }).decode(buf);
 }

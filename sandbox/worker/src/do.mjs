@@ -5,6 +5,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { parseAbi } from 'viem';
 import { makeSandbox, KINDS, SandboxError, ERC20_ABI, jsonSafe } from '../../lib/sandbox.mjs';
 import { limitsFrom, parseConfig, dayStart } from './limits.mjs';
+import { extractLimitsFrom } from './extract.mjs';
 
 const KEEP = 100;
 const HEALTH_TTL_MS = 30_000;
@@ -27,6 +28,9 @@ export class Sandbox extends DurableObject {
     // R2-1: hits carry the salted hash of the visitor's IPv6 /48 ('' for IPv4)
     if (!this.sql.exec('PRAGMA table_info(hits)').toArray().some((c) => c.name === 'net')) this.sql.exec("ALTER TABLE hits ADD COLUMN net TEXT NOT NULL DEFAULT ''");
     this.sql.exec('CREATE INDEX IF NOT EXISTS hits_net ON hits(net, ts)');
+    // extractor demo (/extract): its own hits table, so it can never use up or unlock the attack budget
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS xhits (ip TEXT NOT NULL, ts INTEGER NOT NULL, net TEXT NOT NULL DEFAULT '');
+      CREATE INDEX IF NOT EXISTS xhits_ip ON xhits(ip, ts); CREATE INDEX IF NOT EXISTS xhits_ts ON xhits(ts);`);
     this.tail = Promise.resolve();
     this.queued = 0;
     this.sb = null;
@@ -102,6 +106,35 @@ export class Sandbox extends DurableObject {
     this.sql.exec('INSERT INTO hits (ip, ts, net) VALUES (?, ?, ?)', ipH, now, netH);
     this.sql.exec('DELETE FROM hits WHERE ts < ?', now - 86_400_000 * 2);
     return { ok: true };
+  }
+
+  /** /extract rate limits (no chain sends, no queue). Synchronous check-and-reserve, like reserve(). */
+  async extractReserve({ ip, net = '', demo = false }) {
+    if (this.env.SANDBOX_OFF === '1' || this.env.EXTRACT_OFF === '1') return { status: 503, code: 'xoff' };
+    if (typeof ip !== 'string' || !ip || ip.length > 64 || typeof net !== 'string' || net.length > 64) return { status: 400, code: 'ip' };
+    const L = extractLimitsFrom(this.env);
+    const now = Date.now(), ds = dayStart(now);
+    const day = (s) => Math.ceil((ds + 86_400_000 - now) / 1000);
+    if (demo === true) {
+      const d = this.sql.exec('SELECT COUNT(*) AS n FROM xhits WHERE ip = ? AND ts >= ?', DEMO, ds).one().n;
+      if (d >= L.demoDay) return { status: 429, code: 'x_demo_day', retryAfter: day() };
+      this.sql.exec('INSERT INTO xhits (ip, ts) VALUES (?, ?)', DEMO, now);
+      return { status: 200 };
+    }
+    const ipH = await this.ipHash('x|' + ip), netH = net ? await this.ipHash('x|' + net) : '';
+    const g = this.sql.exec('SELECT COUNT(*) AS n FROM xhits WHERE ts >= ? AND ip != ?', ds, DEMO).one().n;
+    if (g >= L.globalDay) return { status: 429, code: 'x_global_day', retryAfter: day() };
+    if (netH) {
+      const nh = this.sql.exec('SELECT COUNT(*) AS n, MIN(ts) AS first FROM xhits WHERE net = ? AND ts >= ?', netH, now - 3_600_000).one();
+      if (nh.n >= L.net48Hour) return { status: 429, code: 'x_net_hour', retryAfter: Math.max(1, Math.ceil((nh.first + 3_600_000 - now) / 1000)) };
+    }
+    const today = this.sql.exec('SELECT COUNT(*) AS n FROM xhits WHERE ip = ? AND ts >= ?', ipH, ds).one().n;
+    if (today >= L.ipDay) return { status: 429, code: 'x_day', retryAfter: day() };
+    const last = this.sql.exec('SELECT MAX(ts) AS last FROM xhits WHERE ip = ? AND ts >= ?', ipH, now - 86_400_000).one().last;
+    if (last !== null && now - last < L.ipIntervalS * 1000) return { status: 429, code: 'x_interval', retryAfter: Math.ceil((last + L.ipIntervalS * 1000 - now) / 1000) };
+    this.sql.exec('INSERT INTO xhits (ip, ts, net) VALUES (?, ?, ?)', ipH, now, netH);
+    this.sql.exec('DELETE FROM xhits WHERE ts < ?', now - 86_400_000 * 2);
+    return { status: 200 };
   }
 
   /** RPC from the Worker. Input already validated there (kind whitelist, text size, Turnstile or demo); validated again here.

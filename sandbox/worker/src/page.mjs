@@ -111,7 +111,7 @@ td.num,th.num{text-align:right}tr:last-child td{border-bottom:0}
 footer{margin-top:48px;color:var(--muted);font-size:14px}
 @media (max-width:560px){h1{font-size:27px}.stats{gap:8px}.stat{padding:10px 10px}.stat b{font-size:19px}.stat span{font-size:13px;line-height:1.3}th.hide,td.hide{display:none}}`;
 
-function shell(title, body, { turnstile = false, cfg } = {}) {
+export function shell(title, body, { turnstile = false, cfg } = {}) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title><meta name="description" content="Pick an attack on Clerk's pay-run contract and see it refused by a real transaction on Aevum testnet.">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

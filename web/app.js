@@ -1,6 +1,7 @@
 // Clerk approval page. Loaded as a module from index.html (no inline script, so the page runs under script-src 'self').
 // Read-only until the owner connects a wallet. Approvals go only to the pinned PayRun contracts below.
 import { createWalletClient, createPublicClient, custom, http, parseAbi, formatUnits, encodeFunctionData, encodePacked } from './vendor/viem-2.21.0.js';   // vendored (esm.sh viem@2.21.0 es2022 bundle), sha256 in README
+import { walkthrough, simulateRun, BLOCK_REASON } from './sim.js';   // no-wallet simulation (eth_call + a state override; nothing is sent)
 const ABI = parseAbi([
   'function runs(uint256) view returns (uint8 status, address stagedBy, uint64 stagedAt, uint128 total, uint32 lineCount)',
   'function execute(uint256 runId)', 'function reject(uint256 runId, string reason)', 'function owner() view returns (address)',
@@ -124,6 +125,8 @@ async function render() {
     const hold = st === 1 && !expired ? await holdOf(payrun, id, its) : null;
     let label = STATUS[st] || 'Unknown', acts = '';
     const can = st === 1 && trusted(payrun);
+    const v2 = cname(payrun) === 'PayRunV2' && trusted(payrun);
+    const simBtn = (kind, label) => (v2 ? btn('sim', k, payrun, id, label, '', ` data-kind="${kind}"`) : '');
     if (st === 0) c.unread++;
     else if (expired) { c.clear++; label = 'Expired: staged more than 7 days ago, so it can no longer be paid'; if (can) acts = btn('reject', k, payrun, id, 'Reject'); }
     else if (hold && hold.reason === 3) { c.clear++; label = 'Can\'t be paid: the payee changed'; if (can) acts = btn('reject', k, payrun, id, 'Reject'); }
@@ -132,6 +135,7 @@ async function render() {
       if (can) acts = `<label class="ack"><input type="checkbox" data-ack="${k}"> I checked this wallet with the vendor on a number I already had</label>`
         + btn('confirm', k, payrun, id, 'Confirm payee', 'pay', ` disabled data-agent="${esc(hold.agent)}" data-wallet="${esc(hold.payee)}"`) + btn('reject', k, payrun, id, 'Reject');
     } else if (st === 1) { c.pay++; if (can) acts = btn('execute', k, payrun, id, 'Approve and pay', 'pay') + btn('reject', k, payrun, id, 'Reject'); }
+    if (st === 1 && !expired && !(hold && hold.reason === 3)) acts += simBtn(hold ? 'held' : 'pay', hold ? 'Simulate: confirm, then pay' : 'Simulate approving (no wallet)');
     const total = its.reduce((s, i) => s + BigInt(i.units), 0n);
     const rank = st === 1 ? (hold && hold.reason !== 3 ? 0 : expired || hold ? 2 : 1) : st === 0 ? 3 : 4;   // what needs the owner comes first
     parts.push([rank, `<article class="run ${st === 2 ? 'done' : ''}" data-key="${k}" data-run="${id}"><div class="runhead"><div><div class="status">${esc(cname(payrun))} run ${id}: ${esc(label)}</div>
@@ -190,6 +194,7 @@ document.addEventListener('click', async (ev) => {
   const b = ev.target.closest('button[data-act]'); if (!b || !reports.length) return;
   const payrun = b.dataset.payrun, k = b.dataset.key;
   if (!isAddr(payrun) || !trusted(payrun) || !/^[0-9a-f]{8}-\d{1,18}$/.test(k || '') || !/^\d{1,18}$/.test(b.dataset.run || '')) return;
+  if (b.dataset.act === 'sim') return simulateClick(b, payrun, k);
   if (!wallet) await connect(); if (!wallet) return;
   const id = BigInt(b.dataset.run), out = $('#tx-' + k); out.hidden = false;
   document.querySelectorAll(`button[data-key="${k}"]`).forEach((x) => { x.disabled = true; });
@@ -235,3 +240,50 @@ try {
   else reports = (await Promise.all(['report.json', 'report-v2.json'].map((f) => load(f).catch(() => null)))).filter(Boolean);   // hosted: PayRun v1 + PayRunV2
   if (reports.length) await render(); else $('#loader').hidden = false;
 } catch (err) { $('#headline').textContent = String(err.message); $('#loader').hidden = false; }
+
+// ---------------------------------------------------------------- no-wallet simulation (labelled; eth_call only, nothing is sent)
+const SIM_TAG = '<span class="sim-tag">Simulation</span> ';
+const tusd = (u) => money(u);
+async function simulateClick(b, payrun, k) {
+  const kind = b.dataset.kind; if (!['pay', 'held'].includes(kind)) return;
+  const out = $('#tx-' + k); out.hidden = false; b.disabled = true;
+  out.innerHTML = SIM_TAG + 'Asking the contract what would happen…';
+  try {
+    const r = await simulateRun(pub(), payrun, b.dataset.run, kind);
+    const last = r.steps[r.steps.length - 1];
+    const lines = [];
+    if (kind === 'held') {
+      lines.push(`Approve and pay now: ${r.steps[0].paid ? 'paid' : 'not paid, the hold blocks it'}. Nothing moves.`);
+      lines.push(r.steps[1].ok ? 'Confirm the payee: accepted (only the owner can do this).' : 'Confirm the payee: refused, ' + esc(r.steps[1].why));
+    }
+    lines.push(last.ok && last.paid ? `Approve and pay: <strong>paid</strong> ${tusd(last.payeeBalance - r.before.payee)} to ${esc(short(r.payee))}, the vendor's registered wallet. Treasury ${tusd(r.before.treasury)} → ${tusd(last.treasuryBalance)}.`
+      : `Approve and pay: not paid (${esc(last.why || 'blocked')}).`);
+    out.innerHTML = `<div class="simres">${SIM_TAG}What the live contract says would happen if the owner approved now (eth_call as the owner; nothing was signed or sent):<ol>${lines.map((l) => `<li>${l}</li>`).join('')}</ol></div>`;
+  } catch (e) { out.innerHTML = SIM_TAG + 'Could not run the simulation: ' + esc(e.shortMessage || e.message || e); }
+  b.disabled = false;
+}
+const SIM_STEPS = ['Start: the clerk stages a new vendor\'s first invoice', 'Approve and pay (without checking the vendor)', 'Confirm the payee (after calling the vendor on a known number)', 'Approve and pay'];
+let simUpto = 0, simCache = {};
+function simPayrun() { return (PINNED[chainId] || [])[1] || reports.find((r) => cname(r.payrun) === 'PayRunV2')?.payrun || null; }
+async function simNext() {
+  const payrun = simPayrun(); const btnN = $('#simNext');
+  if (!payrun) { $('#simNote').textContent = 'No PayRunV2 to simulate against on this network.'; return; }
+  const upto = simUpto + 1; btnN.disabled = true; $('#simNote').textContent = 'Asking the contract…';
+  try {
+    const r = await walkthrough(pub(), payrun, upto, simCache);
+    simCache = { ctx: r.ctx, vendor: r.vendor };
+    const v = r.vendor, s = r.steps, items = [];
+    if (s[0]) items.push(s[0].ok ? `<strong>The clerk stages ${esc(v.name)}'s first invoice</strong> (agent #${esc(v.agentId)}): ${tusd(r.amount)} to its registered wallet ${esc(short(v.wallet))}. Staged as run ${esc(r.runId)}.`
+      + `<span class="r">${s[0].held ? 'Held: ' + esc(BLOCK_REASON[s[0].reason] || 'on hold') + '.' : 'Not held: this vendor is already trusted.'}</span>` : esc(s[0].text));
+    if (s[1]) items.push(`<strong>The owner presses Approve and pay without checking.</strong><span class="r">${s[1].paid ? 'Paid.' : `Not paid: the contract blocked it. The treasury still holds ${tusd(s[1].treasury)}; the vendor's wallet is unchanged.`}</span>`);
+    if (s[2]) items.push(`<strong>The owner calls the vendor on a number they already had, then confirms the payee.</strong><span class="r">${s[2].ok ? `The contract accepts the confirmation (only the owner can give it). The run ${s[2].canAfter ? 'can now be paid' : 'still can\'t be paid'}.` : 'Refused: ' + esc(s[2].why)}</span>`);
+    if (s[3]) items.push(`<strong>Approve and pay.</strong><span class="r">${s[3].paid ? `Paid ${tusd(r.amount)} to ${esc(short(v.wallet))}, ${esc(v.name)}'s registered wallet. Treasury ${tusd(r.start.treasury)} → ${tusd(s[3].treasury)}. Run ${esc(r.runId)}: Paid.` : 'Not paid: ' + esc(s[3].why || 'blocked')}</span>`);
+    $('#simSteps').innerHTML = items.map((x) => `<li>${SIM_TAG}${x}</li>`).join('');
+    simUpto = upto;
+    if (simUpto < 4) { btnN.textContent = 'Next: ' + SIM_STEPS[simUpto]; $('#simNote').textContent = ''; }
+    else { btnN.textContent = 'Run it again'; simUpto = 0; simCache = {}; $('#simNote').textContent = 'All of this was computed by the live contract and then thrown away: nothing was signed or sent. To do it for real, the owner connects the wallet that signs for its smart account.'; }
+  } catch (e) { $('#simNote').textContent = 'Could not run the simulation: ' + (e.shortMessage || e.message || e); }
+  btnN.disabled = false;
+}
+$('#simNext').hidden = false;
+$('#simNext').addEventListener('click', simNext);
