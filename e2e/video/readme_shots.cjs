@@ -55,7 +55,7 @@ const shot = async (el, path) => { await el.screenshot({ path }); console.log('w
         await p.waitForSelector('#result', { timeout: 60_000 }).catch(() => { bad++; console.log('extract: no result section'); });
         const el = await p.$('#result');
         if (el) {
-          const box = await p.evaluate(() => { const a = document.querySelector('#result').getBoundingClientRect(); const z = document.querySelector('main p.muted:last-of-type') || document.querySelector('.result'); const c = z.getBoundingClientRect(); return { x: 0, y: a.top + window.scrollY - 12, width: document.documentElement.clientWidth, height: c.bottom - a.top + 24 }; });
+          const box = await p.evaluate(() => { const a = document.querySelector('#result').getBoundingClientRect(); const c = document.querySelector('footer').getBoundingClientRect(); return { x: 0, y: a.top + window.scrollY - 12, width: document.documentElement.clientWidth, height: Math.max(100, c.top - a.top) }; });
           await p.screenshot({ path: `${OUT}/3-extractor-${tag}.png`, clip: box, fullPage: true });
           console.log(`wrote ${OUT}/3-extractor-${tag}.png`);
         }

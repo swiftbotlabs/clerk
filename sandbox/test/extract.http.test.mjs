@@ -61,6 +61,7 @@ test('extractor demo over HTTP', { skip, timeout: 900_000 }, async (t) => {
       assert.doesNotMatch(c.text, /Would be staged/);
       assert.equal(await pub.getBlockNumber(), block0, 'no block was mined: nothing was sent');
       assert.deepEqual(await nonces(), n0, 'no sandbox key sent a transaction');
+      await new Promise((r) => setTimeout(r, 6_000));   // /api/state is cached 5 s per isolate: read a fresh copy
       const after = await (await fetch(S.base + '/api/state')).json();
       assert.deepEqual(after.counts, before.counts, 'the attack counters did not move');
       assert.equal(after.attempts.length, before.attempts.length);

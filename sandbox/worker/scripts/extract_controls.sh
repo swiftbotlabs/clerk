@@ -18,6 +18,7 @@ run() {
 fails=0
 mutant() {   # name tests [file old new]...
   local name=$1 tests=$2; shift 2
+  if [ -n "${ONLY:-}" ] && [[ ",$ONLY," != *",$name,"* ]]; then return; fi
   if [[ "$tests" == H* ]] && [ "$NOHTTP" = --no-http ]; then echo "MUTANT $name: skipped (--no-http)" | tee -a "$LOG"; return; fi
   restore
   while [ $# -ge 3 ]; do
