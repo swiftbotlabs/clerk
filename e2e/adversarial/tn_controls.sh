@@ -58,7 +58,7 @@ fi
 if on C4; then   # registered-wallet rule off + PO book off -> a redirect is paid
   keys c4
   if patch "$CHK" 'checks["wallet_is_registered_for_vendor"] = bool(reg_wallet) and wallet.lower() == reg_wallet.lower()' 'checks["wallet_is_registered_for_vendor"] = True'; then
-    run c4 EVAL_MARGIN_UNITS=100000000 EVAL_NO_PO=1; rc=$?; restore
+    run c4 EVAL_MARGIN_UNITS=100000000 EVAL_NO_PO=1 EVAL_GAS_MULT=3 FORK_FUNDER_TQDAY=1.0; rc=$?; restore   # pays every redirect: ~3x the runs
     red "C4 redirect_rule_off" $rc "$(cnt c4 "n('fake_invoice_paid')")" "fake invoices paid"
     node -e "const r=require('$W/c4/run/report.json');const t=require('$W/c4/run/subset/truth.json').files;const f=[...r.result.score.rules.fake_invoice_paid,...r.result.score.hostile.fake_invoice_paid].map(x=>x.file&&t[x.file]?.cls).filter(Boolean);const c={};f.forEach(x=>c[x]=(c[x]||0)+1);console.log('   C4 fake invoices paid by family:',JSON.stringify(c))" 2>/dev/null | tee -a "$LOG"
   else echo "C4: pattern missing (control invalid)" | tee -a "$LOG"; fails=$((fails+1)); fi

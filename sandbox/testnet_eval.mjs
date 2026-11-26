@@ -143,13 +143,6 @@ for (const [k, v] of Object.entries(st.steps)) {
 }
 const inflight = Object.entries(st.steps).filter(([, v]) => v?.inflight);
 if (inflight.length) die(`step(s) ${inflight.map(([k, v]) => `${k} ${v.hash || ''}`).join(', ')} were in flight when a run died: check the explorer / nonces, record by hand or --clear-inflight`);
-if (SWEEP_ONLY) {
-  if (st.result || st.steps.fund_done) die('--sweep-only needs its own fresh state file (this one belongs to an eval run)');
-  st.sweepOnly = true; save();
-  await sweep('reclaim');
-  log(`DONE: sweep-only, ${st.txs.length} txs`);
-  process.exit(0);
-}
 
 // ------------------------------------------------------------------------------------------------ chain helpers
 function decodeRevert(err) {
@@ -200,6 +193,13 @@ async function gasFor(step, role, address, functionName, a, floor) {
 const events = (rec, abi = ABI) => parseEventLogs({ abi, logs: (rec.logs || []).map((l) => ({ ...l, blockNumber: 0n, transactionHash: rec.hash, logIndex: 0 })) , strict: false });
 const py = (argv) => execFileSync('python3', ['-u', ADV + 'tn_plan.py', ...argv], { encoding: 'utf8', timeout: 600_000, stdio: ['ignore', 'pipe', 'inherit'] });
 const tusd = (addr) => pub.readContract({ address: TUSD, abi: ERC20_ABI, functionName: 'balanceOf', args: [addr] });
+if (SWEEP_ONLY) {
+  if (st.result || st.steps.fund_done) die('--sweep-only needs its own fresh state file (this one belongs to an eval run)');
+  st.sweepOnly = true; save();
+  await sweep('reclaim');
+  log(`DONE: sweep-only, ${st.txs.length} txs`);
+  process.exit(0);
+}
 
 // ------------------------------------------------------------------------------------------------ 0. corpus (no chain)
 const corpus = work + '/corpus', sub = work + '/subset', wallets = work + '/wallets.json';
@@ -222,7 +222,7 @@ const TOTAL_TUSD = BUDGET.hostile + BUDGET.rules;
 const FLOAT = (() => { const f = process.env.EVAL_FLOAT_TUSD || (SET === 'full' ? FLOAT_FULL : ''); if (!f) return TOTAL_TUSD;
   if (!/^\d{1,3}(\.\d{1,6})?$/.test(f)) die('EVAL_FLOAT_TUSD: a tUSD8 amount'); const v = cents(f); if (v < PER_RUN + 10_000n) die('float below one run'); return v < TOTAL_TUSD ? v : TOTAL_TUSD; })();
 st.float = FLOAT.toString(); save();
-log(`${SET} set ${JSON.stringify(subInfo.by_family)}; payments ${formatUnits(TOTAL_TUSD, 6)} tUSD8 (hostile ${formatUnits(BUDGET.hostile, 6)}, rules ${formatUnits(BUDGET.rules, 6)}), treasury float ${formatUnits(FLOAT, 6)}`);
+log(`${SET} set ${JSON.stringify(subInfo.by_family)}; allowances ${formatUnits(TOTAL_TUSD, 6)} tUSD8 (expected payments + ${formatUnits(MARGIN, 6)} each: hostile ${formatUnits(BUDGET.hostile, 6)}, rules ${formatUnits(BUDGET.rules, 6)}), treasury float ${formatUnits(FLOAT, 6)}`);
 
 // ------------------------------------------------------------------------------------------------ 1. funds
 if (FORK && !st.steps.fork_funded) {
@@ -243,6 +243,9 @@ if (FORK && !st.steps.fork_funded) {
 if (!st.gasPlan) {   // fixed once per run, so a resumed run funds the same amounts
   const gp = await gasPrice();
   st.gasPlan = SET === 'full' ? gasPlanFull(gp) : Object.fromEntries(Object.entries(GAS).map(([r, v]) => [r, parseEther(v).toString()]));
+  // fork-only: planted controls that pay far more runs than a clean run (C4 pays every redirect) need more gas per key
+  const mult = FORK && /^[2-9]$/.test(process.env.EVAL_GAS_MULT || '') ? BigInt(process.env.EVAL_GAS_MULT) : 1n;
+  if (mult > 1n) st.gasPlan = Object.fromEntries(Object.entries(st.gasPlan).map(([r, v]) => [r, (BigInt(v) * mult).toString()]));
   st.gasPlanPrice = gp.toString(); save();
 }
 const needGas = Object.values(st.gasPlan).reduce((a, v) => a + BigInt(v), 0n);
