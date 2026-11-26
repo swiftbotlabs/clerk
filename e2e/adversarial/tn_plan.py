@@ -3,6 +3,7 @@ check.py -> pay-once dedupe -> pack) for testnet_eval.mjs, which does every chai
 No keys here, no sends: only read calls (cast call) against the RPC.
 
     python3 tn_plan.py subset CORPUS OUT                       # 16 invoices covering every family (+ batch-2 duplicates)
+    python3 tn_plan.py full CORPUS OUT                         # all 160 invoices, same layout
     python3 tn_plan.py plan --rpc URL --registry ADDR --payrun ADDR --clerk ADDR --ids 1:1830,2:1831,3:1832 \
         --batch DIR --extractor rules|json [--pos pos.csv] --out plan.json
     python3 tn_plan.py hostile --corpus OUT --ids ... --out lines.json   # the attacker's best line per attack file, in
@@ -56,6 +57,17 @@ def subset(corpus: Path, out: Path) -> dict:
     pick += [next(f for f, t in me if t["edit"] == "amount_x10"), next(f for f, t in me if t["edit"] == "vendor")]
     pick += [by("doc_amount_edit")[0][0], by("over_cap")[0][0]]
     assert len(pick) == len(set(pick)), "subset picked a file twice"
+    return materialize(corpus, out, truth, pick)
+
+
+def full(corpus: Path, out: Path) -> dict:
+    """The whole seeded corpus (160 invoices, every family at the local eval's counts), in the same layout as subset()."""
+    truth = json.loads((corpus / "truth.json").read_text())
+    return materialize(corpus, out, truth, sorted(truth["files"]))
+
+
+def materialize(corpus: Path, out: Path, truth: dict, pick: list[str]) -> dict:
+    files = truth["files"]
     if out.exists():
         shutil.rmtree(out)
     for b in ("batch1", "batch2"):
@@ -157,8 +169,8 @@ def hostile(a) -> dict:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) > 1 and argv[1] == "subset":
-        print(json.dumps(subset(Path(argv[2]), Path(argv[3]))))
+    if len(argv) > 1 and argv[1] in ("subset", "full"):
+        print(json.dumps((subset if argv[1] == "subset" else full)(Path(argv[2]), Path(argv[3]))))
         return 0
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["plan", "hostile"])

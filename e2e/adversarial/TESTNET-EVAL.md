@@ -1,5 +1,9 @@
 # Clerk adversarial eval: Aevum TESTNET run
 
+**Check it yourself (one command each, from the repo root):**
+- `make judge-rerun`: read-only, no keys. Re-reads every transaction below from the public RPC (https://rpc-test.qday.info), checks sender, status, block and gas, compares both PayRunV2s with the repo's compiled code, regenerates the corpus from its seed and re-derives the outcome table from the Paid events; prints MATCH or MISMATCH per row (Node 18+, Python 3; Foundry optional, for the bytecode check). Same as `cd sandbox && npm ci --omit=dev && npm run judge:testnet-eval`.
+- `make local-eval`: the same 160-invoice attack set, unscaled, on a local anvil chain (Foundry; a few minutes); writes `e2e/work/adversarial/report.md` ([local report](../reports/adversarial-eval-2026-11-22.md)).
+
 Run 2026-11-26T03:51:00.532Z. 16 invoices from the seeded 160-invoice corpus (seed 8004; every attack family, both duplicate kinds, every injection goal), amounts scaled 1/1000 to fit a test treasury. Real ERC-8004 registry [0xF45E7f39Caba1d2055f613970575a7e7069636Be](https://explorer-test.qday.info/address/0xF45E7f39Caba1d2055f613970575a7e7069636Be), real tUSD8 [0x456569838f1d43009A91ebA4263147Afd7233483](https://explorer-test.qday.info/address/0x456569838f1d43009A91ebA4263147Afd7233483), two fresh PayRunV2 (same bytecode as Clerk's): hostile-extractor [0x4a8685a6e47c56f2b47ef00ab08af24f7f2ee763](https://explorer-test.qday.info/address/0x4a8685a6e47c56f2b47ef00ab08af24f7f2ee763), rules-extractor [0xbefd747bbf2000a9e294a7100152d612d0a11188](https://explorer-test.qday.info/address/0xbefd747bbf2000a9e294a7100152d612d0a11188). The owner is a rubber stamp: it executes every run the clerk stages without reading it. Every number below is read back from the chain (Paid events and balances).
 
 ## Outcome (scored from the chain)

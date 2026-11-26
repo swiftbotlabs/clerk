@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "judge:testnet-eval": "node judge_rerun.mjs --report ../e2e/adversarial/testnet-eval.json",
+    "testnet-eval:budget": "node testnet_eval.mjs --budget --set full --funder 0x310aaBFbb6d29DC3ac864448E72c8cD63e3a25Bf"
   },
   "dependencies": {
     "viem": "2.21.0"
