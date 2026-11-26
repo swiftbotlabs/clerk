@@ -272,4 +272,14 @@ call `stage()` from their "pay bills" flow, and agent frameworks use the staging
 - PDF invoices are read with pdftotext; scanned PDFs and images need OCR first (out of scope; they fail closed today).
 
 ## Credits
-forge-std (MIT/Apache-2.0). Local model for the demo extractor: Qwen3-1.7B (Apache-2.0) via llama.cpp. Network facts from the Aevum Starter Kit docs (MIT, PQA Labs). MIT licensed.
+Third-party work this project uses, with its license:
+- **viem** 2.21.0 (MIT, wevm): bundled as `web/vendor/viem-2.21.0.js` for the approval page; also a dependency of the sandbox Worker.
+- **Kernel v3.1** smart account and its ECDSA validator (MIT, ZeroDev): used through Aevum's own deployments (factory `0xaac5D4240AF87249B3f71BC8E4A2cae074A3E419`, validator `0x845ADb2C711129d4f3966735eD98a9F09fC4cE57`); no Kernel code is copied here.
+- **ERC-4337 EntryPoint v0.7** (GPL-3.0, eth-infinitism): Aevum's deployment `0x0000000071727De22E5E9d8BAf0edAc6f37da032`, called, not copied.
+- **forge-std** (MIT/Apache-2.0): Foundry tests.
+- **Hosted extractor demo:** Llama 3.2 3B Instruct on Cloudflare Workers AI (Llama 3.2 Community License; "Built with Llama"), with IBM Granite 4.0 H Micro (Apache-2.0) as fallback.
+- **Local extractor:** Qwen3-1.7B (Apache-2.0) via llama.cpp (MIT).
+- **Cloudflare Turnstile** on the hosted demos (Cloudflare's terms of service).
+- Network facts from the Aevum Starter Kit docs (MIT, PQA Labs).
+
+Clerk itself is MIT licensed (`LICENSE`).
