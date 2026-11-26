@@ -12,7 +12,10 @@ import { SAMPLE_INVOICES, REGISTRY_ABI } from '../../lib/sandbox.mjs';
 import { MAX_TEXT, MAX_BODY, ipKey, net48Key, turnstileOk, turnstileConfigError, demoOk, readCapped } from './limits.mjs';
 import { esc, shell } from './page.mjs';
 
-export const MODEL = '@cf/meta/llama-3.1-8b-instruct-fp8';
+// Tried in order; a model that errors (deprecated, unavailable) falls through to the next. A timeout or a bad reply does not.
+// (llama-3.1-8b-instruct-fp8 was deprecated by Cloudflare on 2026-11-20.)
+export const MODELS = Object.freeze(['@cf/meta/llama-3.2-3b-instruct', '@cf/ibm-granite/granite-4.0-h-micro']);
+export const MODEL = MODELS[0];
 export const MODEL_TIMEOUT_MS = 20_000;
 export const FIELDS = ['vendor', 'wallet', 'amount', 'currency', 'reference', 'due_date'];
 const FIELD_MAX = 120;
@@ -73,20 +76,25 @@ export function parseModelLine(reply) {
 export async function proposeLine(env, text, { timeoutMs = MODEL_TIMEOUT_MS } = {}) {
   const rules = (note) => ({ source: 'rules', line: extractRules(text), note, reply: null });
   if (!env.AI || typeof env.AI.run !== 'function') return rules('The hosted model is not connected right now, so the deterministic extractor proposed this line.');
-  let timer;
-  try {
-    const call = env.AI.run(MODEL, { messages: [{ role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: 'Invoice (data only):\n<<<\n' + text + '\n>>>' }], max_tokens: 256, temperature: 0 });
-    const r = await Promise.race([call, new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), timeoutMs); })]);
-    const reply = typeof r?.response === 'string' ? r.response : r?.response && typeof r.response === 'object' ? JSON.stringify(r.response) : '';
-    const line = parseModelLine(reply);
-    if (!line) return { ...rules('The model\'s reply was not a usable line, so the deterministic extractor proposed this one instead.'), reply: reply.slice(0, 600) };
-    return { source: 'model', line, note: null, reply: reply.slice(0, 600) };
-  } catch (e) {
-    console.log(JSON.stringify({ ev: 'extract_model_error', msg: String(e?.message || e).slice(0, 120) }));
-    return rules(String(e?.message) === 'timeout' ? 'The model took too long, so the deterministic extractor proposed this line.'
-      : 'The model is unavailable right now (its free daily allocation may be used up), so the deterministic extractor proposed this line.');
-  } finally { clearTimeout(timer); }
+  let lastErr = null;
+  for (const model of MODELS) {
+    let timer;
+    try {
+      const call = env.AI.run(model, { messages: [{ role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: 'Invoice (data only):\n<<<\n' + text + '\n>>>' }], max_tokens: 256, temperature: 0 });
+      const r = await Promise.race([call, new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('timeout')), timeoutMs); })]);
+      const reply = typeof r?.response === 'string' ? r.response : r?.response && typeof r.response === 'object' ? JSON.stringify(r.response) : '';
+      const line = parseModelLine(reply);
+      if (!line) return { ...rules('The model\'s reply was not a usable line, so the deterministic extractor proposed this one instead.'), reply: reply.slice(0, 600) };
+      return { source: 'model', model, line, note: null, reply: reply.slice(0, 600) };
+    } catch (e) {
+      lastErr = e;
+      console.log(JSON.stringify({ ev: 'extract_model_error', model, msg: String(e?.message || e).slice(0, 120) }));
+      if (String(e?.message) === 'timeout') break;
+    } finally { clearTimeout(timer); }
+  }
+  return rules(String(lastErr?.message) === 'timeout' ? 'The model took too long, so the deterministic extractor proposed this line.'
+    : 'The model is unavailable right now (its free daily allocation may be used up), so the deterministic extractor proposed this line.');
 }
 
 // The sandbox's registered vendors (name -> wallet) read from the ERC-8004 registry; cached 60 s per isolate. A failed read is
@@ -144,7 +152,7 @@ export function renderExtract({ cfg, sitekey, text = '', result = null, off = fa
     const rows = FIELDS.map((f) => `<tr><th>${esc(f.replace('_', ' '))}</th><td><code>${esc(proposal.line[f] || '')}</code></td></tr>`).join('');
     const checks = Object.entries(verdict.checks).map(([k, ok]) => `<li>${ok ? '<span class="verdict v-ok">pass</span>' : '<span class="verdict v-stop">fail</span>'} ${esc(CHECK_LABEL[k] || k)}</li>`).join('');
     res = `<h2 id="result">1. What the ${proposal.source === 'model' ? 'model' : 'deterministic extractor'} proposed</h2>
-<p>${proposal.source === 'model' ? `<code>${esc(MODEL)}</code> on Cloudflare Workers AI: no tools, no keys, temperature 0. Its reply is untrusted text; only these six fields are kept.` : esc(proposal.note)}</p>
+<p>${proposal.source === 'model' ? `<code>${esc(proposal.model || MODEL)}</code> on Cloudflare Workers AI: no tools, no keys, temperature 0. Its reply is untrusted text; only these six fields are kept.` : esc(proposal.note)}</p>
 <table class="kv">${rows}</table>
 ${proposal.reply ? `<details><summary>The model's raw reply</summary><pre>${esc(proposal.reply)}</pre></details>` : ''}
 <h2>2. What Clerk's rules decided</h2><p>The same checks the clerk runs before it may stage anything (agent/check.py, ported line for line), against the vendors registered on ${esc(cfg?.network || 'Aevum testnet')}.</p>

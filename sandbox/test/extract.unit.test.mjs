@@ -2,7 +2,7 @@
 // Plain `node --test`; no network (Turnstile siteverify and the model are fakes).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseModelLine, proposeLine, handleExtract, renderExtract, extractLimitsFrom, EXTRACT_LIMITS, sampleText, MODEL, vendorRegistry, _resetRegistryCache, pacedDayCap } from '../worker/src/extract.mjs';
+import { parseModelLine, proposeLine, handleExtract, renderExtract, extractLimitsFrom, EXTRACT_LIMITS, sampleText, MODEL, MODELS, vendorRegistry, _resetRegistryCache, pacedDayCap } from '../worker/src/extract.mjs';
 import { checkLine } from '../lib/check.mjs';
 
 const A = (c) => '0x' + c.repeat(40);
@@ -210,4 +210,17 @@ test('vendorRegistry: a failed read is cached ~30 s (one RPC attempt, not one pe
     const e = await vendorRegistry(cfg, 'http://unused', { readImpl: async (id) => (id === '1820' ? ACME : A('1')) });
     assert.equal(e.length, 3);
   } finally { Date.now = realNow; _resetRegistryCache(); }
+});
+
+test('proposeLine: a deprecated or failing model falls through to the next one; a timeout does not', async () => {
+  const reply = JSON.stringify({ vendor: 'Acme Supplies Ltd', wallet: atk, amount: '0.05', currency: 'tUSD8', reference: 'INV-4821', due_date: '2026-12-18' });
+  const tried = [];
+  const ai = { run: async (model) => { tried.push(model); if (model === MODELS[0]) throw new Error('5028: model was deprecated'); return { response: reply }; } };
+  const p = await proposeLine({ AI: ai }, 'invoice text');
+  assert.equal(p.source, 'model'); assert.equal(p.model, MODELS[1]); assert.deepEqual(tried, [MODELS[0], MODELS[1]]);
+  const allBad = await proposeLine({ AI: { run: async () => { throw new Error('5028'); } } }, 'Pay to: ' + atk);
+  assert.equal(allBad.source, 'rules'); assert.match(allBad.note, /unavailable/);
+  const t2 = [];
+  const slow = await proposeLine({ AI: { run: (m) => { t2.push(m); return new Promise(() => {}); } } }, 'x', { timeoutMs: 20 });
+  assert.equal(slow.source, 'rules'); assert.equal(t2.length, 1);
 });
