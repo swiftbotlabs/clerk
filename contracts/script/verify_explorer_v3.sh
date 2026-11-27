@@ -8,6 +8,9 @@
 #                                          # compare with each deploy transaction's input (no explorer write)
 #   script/verify_explorer_v3.sh           # --check, then submit the verifications (explorer API write; no key)
 #   script/verify_explorer_v3.sh --status  # read-only: print the explorer's is_verified for each address
+#   STATE=<deploy state json> script/verify_explorer_v3.sh [--check|--status]
+#        the r7 deployments instead: sandbox/sandbox-testnet-v3.json (VendorRegistry + PayRunV3) or e2e/testnet_v3page.json
+#        (the page's PayRunV3). Constructor args = the deploy tx input minus the repo's creation code, which must be its prefix.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 RPC=${AEVUM_RPC:-https://rpc-test.qday.info}
@@ -30,6 +33,24 @@ ROWS=(
   "0x4b94960192749d5f06031dc3b588762f79a956b9|src/PayRunV3.sol:PayRunV3|$V3ARGS|0x2f1f0986d230515f0002ff0c264085c8bd6423cf895319b6d67018e80c1cd9c6"
   "0x8034c01ba98d882abd30118235d648183d3fae52|src/PayRunV2.sol:PayRunV2|$SBXARGS|0x43691c85f9da1c958c377c3c5dc5b05834c9ad137c75e8d2269993fd57242685"
 )
+if [ -n "${STATE:-}" ]; then
+  [ -f "$STATE" ] && [ ! -L "$STATE" ] || { echo "STATE $STATE missing or a symlink"; exit 1; }
+  mapfile -t ROWS < <(python3 - "$STATE" "$RPC" <<'PY'
+import json, re, subprocess, sys
+st = json.load(open(sys.argv[1])); rpc = sys.argv[2]
+def row(addr, ctr, tx):
+    if not (re.fullmatch(r"0x[0-9a-fA-F]{40}", addr or "") and re.fullmatch(r"0x[0-9a-fA-F]{64}", tx or "")): return
+    bc = subprocess.run(["forge", "inspect", ctr, "bytecode"], capture_output=True, text=True, check=True).stdout.strip().lower()
+    inp = subprocess.run(["cast", "tx", tx, "input", "--rpc-url", rpc], capture_output=True, text=True, check=True).stdout.strip().lower()
+    if not inp.startswith(bc): sys.exit(f"FAIL {addr}: deploy input does not start with the repo's {ctr} creation code")
+    print(f"{addr}|{ctr}|0x{inp[len(bc):]}|{tx}")
+row(st.get("registry") if st.get("registry_deploy_tx") else None, "src/VendorRegistry.sol:VendorRegistry", st.get("registry_deploy_tx"))
+if st.get("version") == "v3": row(st.get("payrun"), "src/PayRunV3.sol:PayRunV3", st.get("payrun_deploy_tx"))
+row(st.get("payrun_v3"), "src/PayRunV3.sol:PayRunV3", st.get("payrun_v3_deploy_tx"))
+PY
+)
+  [ "${#ROWS[@]}" -gt 0 ] || { echo "FAIL: no contract found in $STATE"; exit 1; }
+fi
 V=(--verifier blockscout --verifier-url "$URL" --chain 44005 --compiler-version "$SOLC_VER")
 
 status() {

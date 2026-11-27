@@ -1,4 +1,5 @@
-// No-wallet simulation for the approval page: "what approving would do", computed by eth_call against the LIVE PayRunV2.
+// No-wallet simulation for the approval page: "what approving would do", computed by eth_call against the LIVE PayRunV2 or
+// PayRunV3 (same hold; on PayRunV3 the walkthrough uses a vendor that is not `signedOnly`, since the probe can't sign as a vendor).
 // For one eth_call the owner's address gets the code of contracts/src/sim/DemoProbe.sol (a state override), so every call
 // below runs with msg.sender == owner, exactly like the owner's own approval, and nothing is kept: no key, no signature, no
 // transaction, no state change. The page labels every result as a simulation.
@@ -24,11 +25,16 @@ export const SIM_ABI = parseAbi([
   'error NotStaged(uint256 runId)', 'error RunStale(uint256 runId)', 'error TransferFailed(uint256 line)', 'error Reentrancy()', 'error BadSession()',
   'error ConfirmMismatch(uint256 agentId, address wallet, address registered)', 'error AlreadyTrusted(uint256 agentId, address wallet)']);
 const REG_ABI = parseAbi(['function getAgentWallet(uint256) view returns (address)', 'function tokenURI(uint256) view returns (string)']);
+const V3_ABI = parseAbi(['function signedOnly(uint256 agentId) view returns (bool)']);
+const QDAY_REGISTRY = '0xf45e7f39caba1d2055f613970575a7e7069636be';
 export const BLOCK_REASON = { 1: 'the payee is new or just changed, so it is on hold', 2: 'it was staged during a hold: the owner must confirm the payee',
   3: 'the payee changed after staging: the run is closed' };
 // Vendors the walkthrough may use: ERC-8004 identities this PayRunV2 has never paid (the public sandbox's test vendors and the
 // testnet eval's). The first one the contract shows as new (Held) is used, so the hold is real, not set up by the page.
 export const CANDIDATES = [1822, 1821, 1823, 1824, 1825, 1826, 1827, 1828, 1829, 1830, 1820];   // 1820 last: its name is the same as Clerk's own Acme (#1698)
+// Our own VendorRegistry (PayRunV3) numbers vendors from 1: try the first 12, highest first (the eval's vendors are 1-3).
+export const OWN_REGISTRY_CANDIDATES = [12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
+export const candidatesFor = (registry) => (String(registry).toLowerCase() === QDAY_REGISTRY ? CANDIDATES : OWN_REGISTRY_CANDIDATES);
 const SIM_AMOUNT = 10_000n;   // 0.01 tUSD8
 
 const rd = (pub, address, functionName, args = [], abi = SIM_ABI) => pub.readContract({ address, abi, functionName, args });
@@ -64,9 +70,13 @@ function vendorName(uri) {
 }
 
 /** Pick the vendor for the walkthrough: the first candidate that is new to this PayRunV2 (state Held, registered wallet set). */
-export async function pickVendor(pub, payrun, registry, candidates = CANDIDATES) {
+export async function pickVendor(pub, payrun, registry, candidates = candidatesFor(registry)) {
   for (const id of candidates) {
     try {
+      // PayRunV3: a signedOnly vendor needs its own signature to be staged, which the probe can't make: skip it (PayRunV2 has no
+      // signedOnly(), so the read reverts and the vendor is usable)
+      let signed = false; try { signed = await rd(pub, payrun, 'signedOnly', [BigInt(id)], V3_ABI); } catch {}
+      if (signed) continue;
       const [state, wallet] = await rd(pub, payrun, 'payeeStatus', [BigInt(id)]);
       const reg = await rd(pub, registry, 'getAgentWallet', [BigInt(id)], REG_ABI);
       if (Number(state) === 2 && /^0x[0-9a-fA-F]{40}$/.test(reg) && BigInt(reg) !== 0n && reg.toLowerCase() === wallet.toLowerCase()) {

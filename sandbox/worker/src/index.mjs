@@ -2,12 +2,13 @@
 //   GET  /               page (server-rendered; readable with JS off)      GET /log        last 100 attempts
 //   GET  /attempt/:id    one attempt                                        GET /api/state  same data as JSON (same-origin; no CORS)
 //   GET  /healthz        config + chain + key gas floors (200 ok / 503)     POST /attack    {kind, text<=4KB, cf-turnstile-response}
+//   GET  /history/v2     (v3 config only) the PayRunV2 sandbox's log, read-only, kept as it was; /history/v2/attempt/:id one attempt
 //   GET  /extract        extractor demo form                                POST /extract   {text<=4KB, cf-turnstile-response}: the model
 //                        proposes a line, check.mjs decides; NEVER sends a transaction (worker/src/extract.mjs)
 // Order of checks on POST: kill switch -> origin -> content type + body size -> fields -> Turnstile -> Durable Object
 // (kill switch again, rate limits, one-at-a-time queue, chain sends). No CORS headers are ever sent.
-import { KINDS } from '../../lib/sandbox.mjs';
-import { renderHome, renderAttempt, renderLog, renderMessage } from './page.mjs';
+import { KINDS, kindsFor } from '../../lib/sandbox.mjs';
+import { renderHome, renderAttempt, renderLog, renderMessage, renderHistory } from './page.mjs';
 import { limitsFrom, MAX_BODY, MAX_TEXT, ipKey, net48Key, turnstileOk, turnstileConfigError, demoOk, publicConfigFrom, parseConfig, readCapped } from './limits.mjs';
 import { handleExtract, renderExtract, sampleText, extractLimitsFrom, vendorRegistry } from './extract.mjs';
 export { Sandbox } from './do.mjs';
@@ -79,7 +80,7 @@ async function attack(req, env, stub, cfg) {
     try { const j = JSON.parse(raw); fields = { kind: j.kind, text: j.text, token: j.turnstile }; } catch { return refuse('type', 400, wantsJson, { cfg }); }
   } else return refuse('type', 415, wantsJson, { cfg });
   const kind = typeof fields.kind === 'string' ? fields.kind : '';
-  if (!Object.hasOwn(KINDS, kind)) return refuse('kind', 400, wantsJson, { cfg });
+  if (!Object.hasOwn(kindsFor(cfg.version), kind)) return refuse('kind', 400, wantsJson, { cfg });
   let text = typeof fields.text === 'string' ? fields.text.replace(/\r\n?/g, '\n') : undefined;
   if (text !== undefined && text.length > MAX_TEXT) return refuse('size', 413, wantsJson, { cfg });
   if (!text || !text.trim() || !KINDS[kind].invoice) text = undefined;
@@ -120,8 +121,9 @@ export default {
       const { success } = await env.RL.limit({ key: ipKey(req.headers.get('cf-connecting-ip')) || 'none' });
       if (!success) return html(renderMessage('Slow down', 'Too many requests from your network. Wait a minute.'), 429, { 'retry-after': '60' });
     } else if (env.SANDBOX_DEV !== '1') return html(renderMessage('Not configured', 'The sandbox is not configured.'), 503);
-    const stub = env.SANDBOX.get(env.SANDBOX.idFromName('main'));
     const cfg = publicConfigFrom(env);
+    // v3 runs in its own Durable Object instance; 'main' keeps the PayRunV2 sandbox's log and counters as they were (history)
+    const stub = env.SANDBOX.get(env.SANDBOX.idFromName(cfg?.version === 'v3' ? 'v3' : 'main'));
     if (url.pathname === '/attack') {
       if (method !== 'POST') return html(renderMessage('Not allowed', 'Use the form on the sandbox page.'), 405, { allow: 'POST' });
       return attack(req, env, stub, cfg);
@@ -153,6 +155,14 @@ export default {
     if (url.pathname === '/log') return cachedPage('/log', async () => renderLog({ state: await stub.state({ limit: 100 }), cfg }));
     // R2-2: /api/state shares the 5 s cache (dropped by this isolate after each finished attack)
     if (url.pathname === '/api/state') return cachedPage('/api/state', async () => JSON.stringify({ ...(await stub.state({ limit: 100 })), config: cfg }), jsonRaw);
+    if (cfg.history?.v2 && (url.pathname === '/history/v2' || url.pathname.startsWith('/history/v2/'))) {
+      const old = env.SANDBOX.get(env.SANDBOX.idFromName('main'));
+      const hcfg = { ...cfg, payrun: cfg.history.v2.payrun, version: 'v2', history: null };
+      if (url.pathname === '/history/v2') return cachedPage('/history/v2', async () => renderHistory({ state: await old.state({ limit: 100, history: true }), cfg: hcfg }));
+      const hm = /^\/history\/v2\/attempt\/(\d{1,9})$/.exec(url.pathname);
+      const rec = hm ? await old.attempt(Number(hm[1])) : null;
+      return rec ? html(renderAttempt({ rec, cfg: hcfg, history: true })) : html(renderMessage('Not found', 'That attempt is not in the PayRunV2 sandbox log.', { cfg }), 404);
+    }
     const m = /^\/attempt\/(\d{1,9})$/.exec(url.pathname);
     if (m) {
       const rec = await stub.attempt(Number(m[1]));

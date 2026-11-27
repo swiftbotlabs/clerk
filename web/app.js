@@ -62,8 +62,10 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '';
 const money = (u) => Number(formatUnits(BigInt(u), 6)).toLocaleString('en', { minimumFractionDigits: 2 }) + ' tUSD8';
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
-// The only PayRuns this hosted page will send approvals to (Aevum testnet): PayRun (v1) and PayRunV2. A report for any other contract is read-only.
-const PINNED = { 44005: ['0x2EE29a167CDDb964aAB9C899ea9Ae89847e3Da98', '0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541'] };
+// The only PayRuns this hosted page will send approvals to (Aevum testnet): PayRun (v1), PayRunV2 and, once deployed, the page's
+// PayRunV3 (vendor-signed invoices, our own VendorRegistry). e2e/build_pages.sh fills V3_PAGE from e2e/testnet_v3page.json; empty = none.
+const V3_PAGE = '';
+const PINNED = { 44005: ['0x2EE29a167CDDb964aAB9C899ea9Ae89847e3Da98', '0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541', ...(/^0x[0-9a-fA-F]{40}$/.test(V3_PAGE) ? [V3_PAGE] : [])] };
 const LOCAL = ['localhost', '127.0.0.1', ''].includes(location.hostname);
 const isInt = (v) => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) || (typeof v === 'string' && /^\d{1,18}$/.test(v));
 const isAddr = (a) => /^0x[0-9a-fA-F]{40}$/.test(String(a));
@@ -75,7 +77,7 @@ function clean(r) {
     .map((i) => ({ ...i, payrun: r.payrun, run_id: i.run_id == null ? null : Number(i.run_id), agent_id: i.agent_id == null ? null : Number(i.agent_id), units: String(i.units ?? 0) }));
   return { payrun: r.payrun, items };
 }
-const NAMES = { '0x2ee29a167cddb964aab9c899ea9ae89847e3da98': 'PayRun', '0x89d14bf88d8df1ab8b0f520414fbbc9e1d69f541': 'PayRunV2' };
+const NAMES = { '0x2ee29a167cddb964aab9c899ea9ae89847e3da98': 'PayRun', '0x89d14bf88d8df1ab8b0f520414fbbc9e1d69f541': 'PayRunV2', ...(V3_PAGE ? { [V3_PAGE.toLowerCase()]: 'PayRunV3' } : {}) };
 const cname = (payrun) => NAMES[String(payrun).toLowerCase()] || short(payrun);
 const trusted = (payrun) => LOCAL || (PINNED[chainId] || []).some((a) => a.toLowerCase() === String(payrun).toLowerCase());
 const keyOf = (payrun, id) => String(payrun).slice(2, 10).toLowerCase() + '-' + id;   // DOM-safe: hex + digits only
@@ -125,7 +127,7 @@ async function render() {
     const hold = st === 1 && !expired ? await holdOf(payrun, id, its) : null;
     let label = STATUS[st] || 'Unknown', acts = '';
     const can = st === 1 && trusted(payrun);
-    const v2 = cname(payrun) === 'PayRunV2' && trusted(payrun);
+    const v2 = ['PayRunV2', 'PayRunV3'].includes(cname(payrun)) && trusted(payrun);   // both have the payee-change hold
     const simBtn = (kind, label) => (v2 ? btn('sim', k, payrun, id, label, '', ` data-kind="${kind}"`) : '');
     if (st === 0) c.unread++;
     else if (expired) { c.clear++; label = 'Expired: staged more than 7 days ago, so it can no longer be paid'; if (can) acts = btn('reject', k, payrun, id, 'Reject'); }
@@ -237,7 +239,7 @@ const src = new URLSearchParams(location.search).get('report');
 async function load(url) { const r = await fetch(url, { credentials: 'omit' }); if (!r.ok) throw new Error('report not found'); return clean(await r.json()); }
 try {
   if (src) { const u = sameSite(src); if (!u) throw new Error('Reports can only be opened from this site'); reports = [await load(u)]; }
-  else reports = (await Promise.all(['report.json', 'report-v2.json'].map((f) => load(f).catch(() => null)))).filter(Boolean);   // hosted: PayRun v1 + PayRunV2
+  else reports = (await Promise.all(['report.json', 'report-v2.json', 'report-v3.json'].map((f) => load(f).catch(() => null)))).filter(Boolean);   // hosted: PayRun v1 + PayRunV2 (+ PayRunV3)
   if (reports.length) await render(); else $('#loader').hidden = false;
 } catch (err) { $('#headline').textContent = String(err.message); $('#loader').hidden = false; }
 
@@ -264,10 +266,10 @@ async function simulateClick(b, payrun, k) {
 }
 const SIM_STEPS = ['Start: the clerk stages a new vendor\'s first invoice', 'Approve and pay (without checking the vendor)', 'Confirm the payee (after calling the vendor on a known number)', 'Approve and pay'];
 let simUpto = 0, simCache = {};
-function simPayrun() { return (PINNED[chainId] || [])[1] || reports.find((r) => cname(r.payrun) === 'PayRunV2')?.payrun || null; }
+function simPayrun() { return (PINNED[chainId] || [])[2] || (PINNED[chainId] || [])[1] || reports.find((r) => ['PayRunV3', 'PayRunV2'].includes(cname(r.payrun)))?.payrun || null; }
 async function simNext() {
   const payrun = simPayrun(); const btnN = $('#simNext');
-  if (!payrun) { $('#simNote').textContent = 'No PayRunV2 to simulate against on this network.'; return; }
+  if (!payrun) { $('#simNote').textContent = 'No PayRunV2 or PayRunV3 to simulate against on this network.'; return; }
   const upto = simUpto + 1; btnN.disabled = true; $('#simNote').textContent = 'Asking the contract…';
   try {
     const r = await walkthrough(pub(), payrun, upto, simCache);

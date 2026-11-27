@@ -3,8 +3,8 @@
 // rate-limit hits (salted hashes of the visitor key: IPv4 address or IPv6 /64; never raw IPs; pruned after 2 days).
 import { DurableObject } from 'cloudflare:workers';
 import { parseAbi } from 'viem';
-import { makeSandbox, KINDS, SandboxError, ERC20_ABI, jsonSafe } from '../../lib/sandbox.mjs';
-import { limitsFrom, parseConfig, dayStart } from './limits.mjs';
+import { makeSandbox, KINDS, kindsFor, SENDERS_FOR, SandboxError, ERC20_ABI, jsonSafe } from '../../lib/sandbox.mjs';
+import { limitsFrom, parseConfig, dayStart, versionOf } from './limits.mjs';
 import { extractLimitsFrom, pacedDayCap } from './extract.mjs';
 
 const KEEP = 100;
@@ -144,7 +144,9 @@ export class Sandbox extends DurableObject {
    *  `ip` is the visitor KEY (IPv4 or IPv6 /64), already grouped by the Worker. */
   async attack({ kind, text, ip, net = '', demo = false }) {
     if (this.env.SANDBOX_OFF === '1') return { status: 503, code: 'off' };
-    if (!Object.hasOwn(KINDS, kind)) return { status: 400, code: 'kind' };
+    let kinds;
+    try { kinds = kindsFor(versionOf(parseConfig(this.env).cfg)); } catch { return { status: 503, code: 'config' }; }
+    if (!Object.hasOwn(kinds, kind)) return { status: 400, code: 'kind' };
     if (typeof ip !== 'string' || !ip || ip.length > 64 || typeof net !== 'string' || net.length > 64) return { status: 400, code: 'ip' };
     if (text !== undefined && (typeof text !== 'string' || text.length > 4096)) return { status: 413, code: 'text' };
     if (!KINDS[kind].invoice) text = undefined;
@@ -210,12 +212,14 @@ export class Sandbox extends DurableObject {
     }
   }
 
-  async state({ limit = 25 } = {}) {
+  /** history = true: the read-only log of an older sandbox (no treasury read: the current config's treasury is not its treasury). */
+  async state({ limit = 25, history = false } = {}) {
     const n = Math.max(1, Math.min(KEEP, Number(limit) || 25));
     const attempts = this.sql.exec('SELECT id, rec FROM attempts ORDER BY id DESC LIMIT ?', n).toArray().map((r) => ({ id: r.id, ...JSON.parse(r.rec) }));
     const counts = Object.fromEntries(this.sql.exec('SELECT * FROM counts').toArray().map((r) => [r.kind, r]));
     const ds = dayStart(Date.now());
     const today = this.sql.exec('SELECT COUNT(*) AS n FROM hits WHERE ts >= ? AND ip != ?', ds, DEMO).one().n;
+    if (history === true) return { attempts, counts, history: true };
     return { attempts, counts, today, limits: limitsFrom(this.env), treasury: await this.treasury(), off: this.env.SANDBOX_OFF === '1' };
   }
 
@@ -249,8 +253,10 @@ export class Sandbox extends DurableObject {
       const S = this.sandbox(); out.config = true;
       out.chain = (await S.pub.getChainId()) === this.cfg.chainId;
       const floor = BigInt(this.cfg.minBalanceWei);
-      const bals = await Promise.all(Object.values(this.cfg.addresses).map((a) => S.pub.getBalance({ address: a })));
-      out.keysAboveFloor = bals.length === 8 && bals.every((b) => b >= floor);
+      // every key that SENDS must be above its floor (v3's vendor_acme only signs)
+      const senders = SENDERS_FOR[versionOf(this.cfg)].map((r) => this.cfg.addresses?.[r]);
+      const bals = senders.every(Boolean) ? await Promise.all(senders.map((a) => S.pub.getBalance({ address: a }))) : [];
+      out.keysAboveFloor = bals.length === SENDERS_FOR[versionOf(this.cfg)].length && bals.length >= 7 && bals.every((b) => b >= floor);
       const ts = (await S.pub.getBlock()).timestamp;
       const exp = await Promise.all(['clerk', 'daycap'].map((r) => S.pub.readContract({ address: this.cfg.payrun, abi: SESSIONS_ABI, functionName: 'sessions', args: [this.cfg.addresses[r]] })));
       out.sessionsValid = exp.every((s) => s[0] > ts + SESSION_MARGIN_S && s[5] === false);

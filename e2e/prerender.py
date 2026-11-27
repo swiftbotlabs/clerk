@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import os
 import subprocess
 import sys
@@ -25,6 +26,21 @@ EXPLORER = "https://explorer-test.qday.info"
 STATUS = ["Could not read this run from the chain", "Waiting for your approval", "Paid", "Rejected"]
 RUN_TTL = 7 * 86400
 NAMES = {"0x2ee29a167cddb964aab9c899ea9ae89847e3da98": "PayRun", "0x89d14bf88d8df1ab8b0f520414fbbc9e1d69f541": "PayRunV2"}
+V3PAGE = Path(os.environ.get("CLERK_V3PAGE") or APP / "e2e/testnet_v3page.json")   # the approval page's PayRunV3 (written by e2e/deploy_v3_page.sh); absent = none yet
+
+
+def v3page() -> dict:
+    if not V3PAGE.exists():
+        return {}
+    d = json.loads(V3PAGE.read_text())
+    for k in ("payrun_v3", "registry"):
+        if not re.fullmatch(r"0x[0-9a-fA-F]{40}", str(d.get(k, ""))):
+            raise SystemExit(f"prerender: {V3PAGE.name} {k} is not an address")
+    return d
+
+
+if v3page():
+    NAMES[v3page()["payrun_v3"].lower()] = "PayRunV3"
 
 
 def cast(*args: str, tries: int = 3) -> str:
@@ -141,21 +157,29 @@ def record() -> str:
         ("The clerk's key as a Kernel permission: first UserOperation enables it and stages PayRunV2 run 2 (shown above)", t2["perm_stage_tx"]),
         ("The owner revokes the clerk's permission", t2["perm_revoke_tx"]),
     ]
+    t3 = v3page()
+    for label, key in (("PayRunV3 deployed for this page (vendor-signed invoices; vendors in our own VendorRegistry)", "payrun_v3_deploy_tx"),
+                       ("PayRunV3 set up by the owner's smart account (allowance, the clerk's session, Acme signs its invoices)", "setup_tx"),
+                       ("PayRunV3 run 1 staged by the clerk with the vendor's signature (held: the payee is new to this contract)", "stage_tx")):
+        if t3.get(key):
+            rows.append((label, t3[key]))
     lis = []
     for label, h in rows:
         ok = tx_ok(h)
         lis.append(f'<li>{esc(label)}: <a href="{EXPLORER}/tx/{esc(h)}">{esc(h[:10])}…</a>'
                    f'{"" if ok else " (could not read its receipt at build time)"}</li>')
+    v3 = (f'<a href="{EXPLORER}/address/{esc(t3["payrun_v3"])}">PayRunV3</a> and its '
+          f'<a href="{EXPLORER}/address/{esc(t3["registry"])}">VendorRegistry</a>, ') if t3 else ""
     return ("<h2>On Aevum testnet</h2><p>Every step below is a transaction you can open on the explorer. Contracts: "
-            f'<a href="{EXPLORER}/address/0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541">PayRunV2</a>, '
+            f'{v3}<a href="{EXPLORER}/address/0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541">PayRunV2</a>, '
             f'<a href="{EXPLORER}/address/0x2EE29a167CDDb964aAB9C899ea9Ae89847e3Da98">PayRun</a>, '
-            f'<a href="{EXPLORER}/address/0x4Ea16B1bb18005344FC77491F3809a47C74c01a4">ClerkStagePolicy</a> (verified source).</p>'
+            f'<a href="{EXPLORER}/address/0x4Ea16B1bb18005344FC77491F3809a47C74c01a4">ClerkStagePolicy</a> (verified source{"; PayRunV3 and VendorRegistry: see the README deployments table" if t3 else ""}).</p>'
             f'<section id="record" class="item"><ul class="rec">{"".join(lis)}</ul></section>')
 
 
 def main(argv: list[str]) -> int:
     page = Path(argv[1]) if len(argv) > 1 else APP / "docs/index.html"
-    reports = [json.loads((page.parent / f).read_text()) for f in ("report.json", "report-v2.json") if (page.parent / f).exists()]
+    reports = [json.loads((page.parent / f).read_text()) for f in ("report.json", "report-v2.json", "report-v3.json") if (page.parent / f).exists()]
     items = [dict(i, payrun=r["payrun"]) for r in reports for i in (r.get("items") or [])]
     by_run: dict[tuple[str, int], list[dict]] = {}
     for it in items:

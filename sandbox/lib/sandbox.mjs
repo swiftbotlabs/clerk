@@ -1,5 +1,10 @@
-// Clerk public sandbox: each attack a visitor picks becomes REAL transactions against a separate, capped PayRunV2
-// deployment on Aevum testnet. Shared by the Worker (worker/) and the fork tests (test/attacks.fork.test.mjs).
+// Clerk public sandbox: each attack a visitor picks becomes REAL transactions against a separate, capped PayRun deployment on
+// Aevum testnet. Shared by the Worker (worker/) and the fork tests (test/attacks.fork.test.mjs).
+// cfg.version 'v2' (default; the 25 Nov sandbox): PayRunV2 + QDay's ERC-8004 registry, vendors re-point their own wallets.
+// cfg.version 'v3' (r7): PayRunV3 + our own VendorRegistry. Acme is `signedOnly`: every Acme line the sandbox stages carries
+// Acme's EIP-712 signature (the vendor_acme key signs; that wallet only ever receives the 0.01 seed payment), and three extra
+// attacks try to get an unsigned, forged or edited-after-signing line staged. Wallet changes ("hijack", "new payee") are made
+// by the registry's owner key ('registrar'), i.e. the payer's vendor master file is edited.
 //
 // Safety rules enforced here (not only in the Worker):
 //   - The sandbox owner key only ever calls execute(runId) on a run THIS module staged in the same attempt, and only after
@@ -26,6 +31,12 @@ export const PAYRUN_ABI = parseAbi([
   'function paidInRun(bytes32) view returns (uint256)',
   'function owner() view returns (address)',
   'function payeeStatus(uint256 agentId) view returns (uint8 state, address wallet, uint64 releaseAt, uint32 changes)',
+  // PayRunV3 only (vendor-signed invoices)
+  'struct Proof { uint32 dueDate; bytes signature; }',
+  'function stageSigned(Line[] lines, Proof[] proofs) returns (uint256)',
+  'function signedOnly(uint256 agentId) view returns (bool)',
+  'event InvoiceSigned(uint256 indexed runId, uint256 line, uint256 indexed agentId, address signer, uint32 dueDate)',
+  'error VendorSignatureRequired(uint256 line, uint256 agentId)', 'error BadVendorSignature(uint256 line, uint256 agentId, address payee)',
   'event Staged(uint256 indexed runId, address indexed key, uint256 lines, uint256 total)',
   'event Rejected(uint256 indexed runId, string reason)',
   'event Paid(uint256 indexed runId, uint256 line, bytes32 indexed invoiceHash, bytes32 invoiceRef, uint256 indexed agentId, address payee, uint256 amount)',
@@ -44,6 +55,15 @@ export const REGISTRY_ABI = parseAbi([
   'function setAgentWallet(uint256 agentId, address newWallet, uint256 deadline, bytes signature)',
   'function register(string) returns (uint256)',
   'event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)',
+]);
+/** Our own VendorRegistry (PayRunV3 sandbox): ERC-8004 reads, owner-only writes. */
+export const VENDOR_REGISTRY_ABI = parseAbi([
+  'function getAgentWallet(uint256) view returns (address)', 'function owner() view returns (address)', 'function count() view returns (uint256)',
+  'function register(string agentURI, address wallet) returns (uint256)', 'function setAgentWallet(uint256 agentId, address wallet)',
+  'function tokenURI(uint256) view returns (string)',
+  'event Registered(uint256 indexed agentId, address indexed wallet, string agentURI)',
+  'event AgentWalletSet(uint256 indexed agentId, address indexed from, address indexed to)',
+  'error NotOwner()', 'error UnknownAgent(uint256 agentId)', 'error ZeroAddress()', 'error SameWallet(uint256 agentId, address wallet)',
 ]);
 export const ERC20_ABI = parseAbi(['function balanceOf(address) view returns (uint256)', 'function allowance(address,address) view returns (uint256)',
   'function approve(address,uint256) returns (bool)', 'function transfer(address,uint256) returns (bool)']);
@@ -67,7 +87,25 @@ export const KINDS = {
   duplicate_in_run: { n: 13, title: 'Same invoice twice in one run', expect: 'AlreadyStaged' },
   zero_amount:     { n: 14, title: 'Zero-amount line (probe)', expect: 'ZeroAmount' },
   genuine:         { n: 0, title: 'Control: a genuine invoice to the registered wallet', expect: 'Staged', invoice: true, control: true },
+  // PayRunV3 only: vendor-signed invoices
+  unsigned_invoice: { n: 15, title: 'Unsigned invoice for a vendor that signs its invoices', expect: 'VendorSignatureRequired', v3: true },
+  forged_signature: { n: 16, title: 'Invoice "signed" by someone other than the vendor', expect: 'BadVendorSignature', v3: true },
+  edited_after_signing: { n: 17, title: 'Amount raised after the vendor signed (0.02 signed, 0.05 staged)', expect: 'BadVendorSignature', v3: true },
 };
+/** The attack kinds a deployment offers: v2 has 1-14 + the control, v3 adds 15-17. */
+export const kindsFor = (version) => Object.fromEntries(Object.entries(KINDS).filter(([, K]) => !K.v3 || version === 'v3'));
+/** The Worker's key roles per version (only these may be in SANDBOX_KEYS). */
+export const ROLES_FOR = {
+  v2: ['owner', 'clerk', 'revoked', 'expired', 'stranger', 'daycap', 'vendor_hijack', 'vendor_new'],
+  v3: ['owner', 'clerk', 'revoked', 'expired', 'stranger', 'daycap', 'registrar', 'vendor_acme'],
+};
+/** Roles that send transactions (the gas floor applies to these; v3's vendor_acme only signs). */
+export const SENDERS_FOR = { v2: ROLES_FOR.v2, v3: ROLES_FOR.v3.filter((r) => r !== 'vendor_acme') };
+/** EIP-712 domain + type a vendor signs on PayRunV3 (contracts/src/PayRunV3.sol invoiceDigest). */
+export const INVOICE_TYPES = { Invoice: [{ name: 'payeeAgentId', type: 'uint256' }, { name: 'payee', type: 'address' }, { name: 'amount', type: 'uint128' },
+  { name: 'invoiceHash', type: 'bytes32' }, { name: 'dueDate', type: 'uint32' }] };
+export const invoiceDomain = (chainId, payrun) => ({ name: 'Clerk PayRun', version: '3', chainId, verifyingContract: payrun });
+export const SANDBOX_DUE = 20261218;   // the due date every sandbox invoice carries (yyyymmdd, as tn_plan.py sigdata)
 
 export const SAMPLE_INVOICES = {
   payee_swap: (v) => `${v.acme.name.toUpperCase()}\nFrom: ${v.acme.name}\nInvoice No: INV-{N}\nDue date: 2026-12-18\nAmount due: 0.05 tUSD8\n` +
@@ -96,6 +134,8 @@ export function makeSandbox(cfg) {
   const gasStage = BigInt(cfg.gasStage ?? 400_000), gasExecute = BigInt(cfg.gasExecute ?? 400_000), gasRegistry = BigInt(cfg.gasRegistry ?? 150_000);
   const maxGasPrice = BigInt(cfg.maxGasPriceWei ?? 5_000_000_000n), minBalance = BigInt(cfg.minBalanceWei ?? 50_000_000_000_000_000n);
 
+  const V3 = cfg.version === 'v3';
+  if (cfg.version !== undefined && !['v2', 'v3'].includes(cfg.version)) throw new SandboxError('unknown sandbox version');
   const read = (functionName, args = []) => pub.readContract({ address: cfg.payrun, abi: PAYRUN_ABI, functionName, args });
   const registered = (id) => pub.readContract({ address: cfg.registry, abi: REGISTRY_ABI, functionName: 'getAgentWallet', args: [BigInt(id)] });
 
@@ -147,6 +187,28 @@ export function makeSandbox(cfg) {
   const freshAddress = () => privateKeyToAccount(generatePrivateKey()).address;
   const line = (id, payee, amount, hash, ref) => ({ payeeAgentId: BigInt(id), payee, amount: BigInt(amount), invoiceHash: hash, invoiceRef: ref32(ref) });
 
+  /** V3: the vendor's EIP-712 signature over exactly this line (signer = a local account; the vendor's or an attacker's). */
+  const signLine = (signer, l, dueDate = SANDBOX_DUE) => signer.signTypedData({ domain: invoiceDomain(cfg.chainId, cfg.payrun), types: INVOICE_TYPES,
+    primaryType: 'Invoice', message: { payeeAgentId: l.payeeAgentId, payee: l.payee, amount: l.amount, invoiceHash: l.invoiceHash, dueDate } });
+  /** The stage call for `lines`. V2: stage(lines). V3: stageSigned(lines, proofs) where Acme's lines carry Acme's signature
+   *  (opts.sign = false sends them unsigned; opts.proofs overrides). Lines of other vendors go unsigned (they are not signedOnly). */
+  async function stageCall(lines, { sign = true, proofs } = {}) {
+    if (!V3) return { fn: 'stage', args: [lines] };
+    if (!proofs) {
+      proofs = [];
+      for (const l of lines) {
+        const acme = String(l.payeeAgentId) === String(cfg.vendors.acme.id) && l.payee.toLowerCase() === acct.vendor_acme.address.toLowerCase();
+        proofs.push({ dueDate: SANDBOX_DUE, signature: sign && acme ? await signLine(acct.vendor_acme, l) : '0x' });
+      }
+    }
+    return { fn: 'stageSigned', args: [lines, proofs] };
+  }
+  /** refusal() for a stage call built by stageCall(). */
+  async function stageRefusal(step, from, lines, expect, opts) {
+    const { fn, args } = await stageCall(lines, opts);
+    return refusal(step, from, fn, args, expect);
+  }
+
   /** A refusal attempt: simulate, require the expected revert, send, require a reverted receipt. */
   async function refusal(step, from, functionName, args, expect, gas = gasStage) {
     const sim = await simulate(from, functionName, args);
@@ -160,9 +222,10 @@ export function makeSandbox(cfg) {
 
   /** A staging that is expected to be ACCEPTED (control, setup legs). */
   async function accepted(step, from, lines) {
-    const sim = await simulate(from, 'stage', [lines]);
+    const { fn, args } = await stageCall(lines);
+    const sim = await simulate(from, fn, args);
     if (!sim.ok) return { step, from, expect: 'Staged', sent: false, fault: true, simulated: sim.error.name, simArgs: sim.error.args };
-    const tx = await send(from, cfg.payrun, PAYRUN_ABI, 'stage', [lines], gasStage);
+    const tx = await send(from, cfg.payrun, PAYRUN_ABI, fn, args, gasStage);
     const ev = parseEventLogs({ abi: PAYRUN_ABI, logs: tx.logs });
     const staged = ev.find((l) => l.eventName === 'Staged');
     return { step, from, expect: 'Staged', sent: true, hash: tx.hash, status: tx.status, block: tx.block, gasUsed: tx.gasUsed,
@@ -187,6 +250,11 @@ export function makeSandbox(cfg) {
   /** The vendor key re-points its ERC-8004 wallet to a fresh address (EIP-712 consent signed by the new wallet). */
   async function repoint(step, vendorKey, agentId) {
     const nw = privateKeyToAccount(generatePrivateKey());
+    if (V3) {   // our VendorRegistry: only its owner (the payer's registrar key) changes a wallet; the PayRun sees a payee change
+      const tx = await send('registrar', cfg.registry, VENDOR_REGISTRY_ABI, 'setAgentWallet', [BigInt(agentId), nw.address], gasRegistry);
+      return { step, from: 'registrar', expect: 'wallet changed', sent: true, hash: tx.hash, status: tx.status, block: tx.block, gasUsed: tx.gasUsed,
+        newWallet: nw.address, fault: tx.status !== 'success' || (await registered(agentId)).toLowerCase() !== nw.address.toLowerCase() };
+    }
     const owner = acct[vendorKey].address;
     const deadline = (await pub.getBlock()).timestamp + 120n;
     const signature = await nw.signTypedData({
@@ -224,7 +292,7 @@ export function makeSandbox(cfg) {
    * when resting (gas floor, gas price) so the caller can say so. */
   async function attack(kind, { text } = {}) {
     const K = KINDS[kind];
-    if (!K) throw new SandboxError('unknown attack kind');
+    if (!K || (K.v3 && !V3)) throw new SandboxError('unknown attack kind');
     const dir = await directory();
     const n = Number(await read('runCount')) + 1;
     const steps = [];
@@ -242,9 +310,13 @@ export function makeSandbox(cfg) {
           const registeredPayee = inv.registeredPayee;
           if (!registeredPayee) {
             // F5: a replaced payee must be refused for the PAYEE; any other answer is a fault and nothing is sent
-            steps.push(await refusal('clerk stages the line anyway', 'clerk', 'stage', [[l]], 'PayeeNotRegistered'));
+            steps.push(await stageRefusal('clerk stages the line anyway', 'clerk', [l], 'PayeeNotRegistered', { sign: false }));
+          } else if (V3 && await read('signedOnly', [BigInt(inv.agentId)])) {
+            // V3: the payee is right, but this vendor signs its invoices and nobody signed this text: refused on chain
+            steps.push(await stageRefusal("clerk stages it without the vendor's signature", 'clerk', [l], 'VendorSignatureRequired', { sign: false }));
           } else {
-            const sim = await simulate('clerk', 'stage', [[l]]);
+            const { fn, args } = await stageCall([l], { sign: false });
+            const sim = await simulate('clerk', fn, args);
             if (sim.ok) steps.push({ ...(await accepted('stage (contract accepted: payee is the registered wallet)', 'clerk', [l])), fault: false, note: 'accepted: your invoice named the registered wallet (staged, never paid here)' });
             else steps.push({ step: 'not sent', from: 'clerk', sent: false, fault: false, notCounted: true, simulated: sim.error.name,
               note: 'your invoice named the registered wallet; the contract would refuse it for another reason, so nothing was sent and it is not counted' });
@@ -253,37 +325,37 @@ export function makeSandbox(cfg) {
         break;
       }
       case 'over_run_cap':
-        steps.push(await refusal('stage 0.11 tUSD8 (run cap 0.10)', 'clerk', 'stage', [[line(A.id, A.wallet, 110_000n, randHash('cap'), `SBX-${n}`)]], 'RunCapExceeded'));
+        steps.push(await stageRefusal('stage 0.11 tUSD8 (run cap 0.10)', 'clerk', [line(A.id, A.wallet, 110_000n, randHash('cap'), `SBX-${n}`)], 'RunCapExceeded'));
         break;
       case 'split_day_cap': {
         const [, today] = await read('headroom', [acct.daycap.address]);
         if (today >= 60_000n) steps.push(await accepted('first half: stage 0.06 (accepted, under the caps)', 'daycap', [line(A.id, A.wallet, 60_000n, randHash('day1'), `SBX-${n}a`)]));
-        steps.push(await refusal('second half: stage 0.06 more the same day (day cap 0.10)', 'daycap', 'stage', [[line(A.id, A.wallet, 60_000n, randHash('day2'), `SBX-${n}b`)]], 'DayCapExceeded'));
+        steps.push(await stageRefusal('second half: stage 0.06 more the same day (day cap 0.10)', 'daycap', [line(A.id, A.wallet, 60_000n, randHash('day2'), `SBX-${n}b`)], 'DayCapExceeded'));
         break;
       }
       case 'resend_paid':
-        steps.push(await refusal('re-stage the invoice paid at setup', 'clerk', 'stage', [[line(A.id, A.wallet, 10_000n, cfg.paidInvoiceHash, 'SBX-PAID-1')]], 'AlreadyPaid'));
+        steps.push(await stageRefusal('re-stage the invoice paid at setup', 'clerk', [line(A.id, A.wallet, 10_000n, cfg.paidInvoiceHash, 'SBX-PAID-1')], 'AlreadyPaid'));
         break;
       case 'clerk_executes':
         steps.push(await refusal('clerk key calls execute(run 1)', 'clerk', 'execute', [1n], 'NotOwner', gasExecute));
         break;
       case 'revoked_key':
-        steps.push(await refusal('revoked key stages a valid line', 'revoked', 'stage', [[line(A.id, A.wallet, 10_000n, randHash('rev'), `SBX-${n}`)]], 'SessionRevokedErr'));
+        steps.push(await stageRefusal('revoked key stages a valid line', 'revoked', [line(A.id, A.wallet, 10_000n, randHash('rev'), `SBX-${n}`)], 'SessionRevokedErr'));
         break;
       case 'expired_key':
-        steps.push(await refusal('expired key stages a valid line', 'expired', 'stage', [[line(A.id, A.wallet, 10_000n, randHash('exp'), `SBX-${n}`)]], 'SessionExpired'));
+        steps.push(await stageRefusal('expired key stages a valid line', 'expired', [line(A.id, A.wallet, 10_000n, randHash('exp'), `SBX-${n}`)], 'SessionExpired'));
         break;
       case 'stranger_key':
-        steps.push(await refusal('key with no session stages a valid line', 'stranger', 'stage', [[line(A.id, A.wallet, 10_000n, randHash('str'), `SBX-${n}`)]], 'NoSession'));
+        steps.push(await stageRefusal('key with no session stages a valid line', 'stranger', [line(A.id, A.wallet, 10_000n, randHash('str'), `SBX-${n}`)], 'NoSession'));
         break;
       case 'duplicate_in_run': {
         const h = randHash('dup');
         const l = line(A.id, A.wallet, 10_000n, h, `SBX-${n}`);
-        steps.push(await refusal('one run lists the same invoice twice', 'clerk', 'stage', [[l, l]], 'AlreadyStaged'));
+        steps.push(await stageRefusal('one run lists the same invoice twice', 'clerk', [l, l], 'AlreadyStaged'));
         break;
       }
       case 'zero_amount':
-        steps.push(await refusal('stage a 0.00 line', 'clerk', 'stage', [[line(A.id, A.wallet, 0n, randHash('zero'), `SBX-${n}`)]], 'ZeroAmount'));
+        steps.push(await stageRefusal('stage a 0.00 line', 'clerk', [line(A.id, A.wallet, 0n, randHash('zero'), `SBX-${n}`)], 'ZeroAmount'));
         break;
       case 'hijack_after_staging': {
         const H = dir.hijack;
@@ -294,6 +366,24 @@ export function makeSandbox(cfg) {
         steps.push(s2);
         if (s2.fault) break;
         steps.push(await blockedExecute('owner tries to pay the run', s1.runId, 3));
+        break;
+      }
+      case 'unsigned_invoice':
+        steps.push(await stageRefusal("clerk stages a correct Acme line with no signature", 'clerk',
+          [line(A.id, A.wallet, 20_000n, randHash('uns'), `SBX-${n}`)], 'VendorSignatureRequired', { sign: false }));
+        break;
+      case 'forged_signature': {
+        const l = line(A.id, A.wallet, 20_000n, randHash('forge'), `SBX-${n}`);
+        const forger = privateKeyToAccount(generatePrivateKey());     // anyone but Acme's registered wallet
+        steps.push(await stageRefusal('clerk stages it with a signature made by another key', 'clerk', [l], 'BadVendorSignature',
+          { proofs: [{ dueDate: SANDBOX_DUE, signature: await signLine(forger, l) }] }));
+        break;
+      }
+      case 'edited_after_signing': {
+        const signed = line(A.id, A.wallet, 20_000n, randHash('edit'), `SBX-${n}`);
+        const signature = await signLine(acct.vendor_acme, signed);   // Acme really signed 0.02
+        steps.push(await stageRefusal("clerk stages 0.05 with Acme's signature over 0.02", 'clerk', [{ ...signed, amount: 50_000n }], 'BadVendorSignature',
+          { proofs: [{ dueDate: SANDBOX_DUE, signature }] }));
         break;
       }
       case 'new_payee_unconfirmed': {
@@ -316,7 +406,7 @@ export function makeSandbox(cfg) {
       accepted: K.control ? !fault : (last?.expect === 'Staged' && !fault), fault, offchain, at: new Date().toISOString() };
   }
 
-  return { attack, directory, read, registered, pub, acct, simulate, blockedExecute };
+  return { attack, directory, read, registered, pub, acct, simulate, blockedExecute, stageCall, signLine, version: V3 ? 'v3' : 'v2' };
 }
 
 /** JSON-safe (BigInt -> string). */

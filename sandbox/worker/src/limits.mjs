@@ -28,12 +28,21 @@ export function limitsFrom(env = {}) {
 }
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/, H32 = /^0x[0-9a-fA-F]{64}$/;
+// The Worker's key roles per sandbox version (same lists as lib/sandbox.mjs ROLES_FOR; test/worker.unit.test.mjs checks they agree).
+export const WORKER_ROLES = Object.freeze({
+  v2: Object.freeze(['owner', 'clerk', 'revoked', 'expired', 'stranger', 'daycap', 'vendor_hijack', 'vendor_new']),
+  v3: Object.freeze(['owner', 'clerk', 'revoked', 'expired', 'stranger', 'daycap', 'registrar', 'vendor_acme']),
+});
+/** The sandbox version a config names ('v2' when absent: the 25 Nov PayRunV2 config has no version field). */
+export const versionOf = (cfg) => (cfg?.version === undefined ? 'v2' : cfg.version);
 /** Validate SANDBOX_CONFIG + SANDBOX_KEYS. Throws (without echoing values) on anything unexpected. */
 export function parseConfig(env) {
   let cfg, keys;
   try { cfg = JSON.parse(env.SANDBOX_CONFIG || ''); } catch { throw new Error('SANDBOX_CONFIG missing or not JSON'); }
   try { keys = JSON.parse(env.SANDBOX_KEYS || ''); } catch { throw new Error('SANDBOX_KEYS missing or not JSON'); }
-  const need = ['owner', 'clerk', 'revoked', 'expired', 'stranger', 'daycap', 'vendor_hijack', 'vendor_new'];
+  const version = versionOf(cfg);
+  if (!Object.hasOwn(WORKER_ROLES, version)) throw new Error('config: version');
+  const need = WORKER_ROLES[version];
   for (const r of need) if (!H32.test(keys?.[r] || '')) throw new Error(`SANDBOX_KEYS: role ${r} missing`);
   if (Object.keys(keys).some((k) => !need.includes(k))) throw new Error('SANDBOX_KEYS: unexpected role (funder/treasury keys must not be here)');
   if (cfg.chainId !== 44005) throw new Error('config: chainId must be 44005');
@@ -44,6 +53,11 @@ export function parseConfig(env) {
   for (const v of ['acme', 'hijack', 'new']) if (!/^\d{1,9}$/.test(String(cfg.vendors?.[v]?.id ?? '')) || !cfg.vendors[v].name) throw new Error(`config: vendor ${v}`);
   if (cfg.vendors.acme.wallet !== undefined && !ADDR.test(cfg.vendors.acme.wallet)) throw new Error('config: vendor acme wallet');
   if (cfg.explorer && !/^https:\/\/[a-z0-9.-]+$/.test(cfg.explorer)) throw new Error('config: explorer');
+  // v3: the registry is ours (any address, read from the config) and must differ from QDay's; the old PayRunV2 log is kept readable
+  if (version === 'v3' && cfg.registry.toLowerCase() === '0xf45e7f39caba1d2055f613970575a7e7069636be') throw new Error('config: v3 registry');
+  if (cfg.history !== undefined) {
+    if (version !== 'v3' || typeof cfg.history !== 'object' || cfg.history === null || Object.keys(cfg.history).join() !== 'v2' || !ADDR.test(cfg.history.v2?.payrun || '')) throw new Error('config: history');
+  }
   return { cfg, keys };
 }
 
@@ -123,7 +137,7 @@ export async function demoOk(env, header) {
 export function publicConfigFrom(env) {
   try {
     const { cfg: c } = parseConfig(env);
-    return { network: c.network, explorer: c.explorer, payrun: c.payrun, registry: c.registry, treasury: c.treasury, treasuryStart: c.treasuryStart || null,
+    return { version: versionOf(c), history: c.history || null, network: c.network, explorer: c.explorer, payrun: c.payrun, registry: c.registry, treasury: c.treasury, treasuryStart: c.treasuryStart || null,
       token: c.token, vendors: c.vendors, addresses: c.addresses, seed: c.seed || {} };
   } catch { return null; }
 }

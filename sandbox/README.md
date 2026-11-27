@@ -27,11 +27,20 @@ The deployment record is `sandbox-testnet.json`.
   (`watch_paid.mjs`) that alerts on any `Paid` event from the sandbox contract.
 - Two security reviews before launch; 35 deliberately broken builds each fail the tests (`worker/scripts/controls.sh`).
 
+## PayRunV3 mode (vendor-signed invoices, our own vendor registry)
+The same Worker and library also run a sandbox on PayRunV3 with its own `VendorRegistry` (`node deploy.mjs --v3 ...`; the state
+file's `version` picks the mode). Acme is `signedOnly`: every Acme line the sandbox stages carries Acme's EIP-712 signature, and three
+more attacks try to get past that: an unsigned invoice (`VendorSignatureRequired`), a signature by another key and an amount raised
+after the vendor signed (both `BadVendorSignature`). Wallet changes are made by the registry's owner (the payer's vendor file edited),
+and PayRunV3's hold still blocks them. In this mode the attempts go to their own log; the PayRunV2 sandbox's log stays readable at
+`/history/v2`. Tested on a fork of Aevum testnet: `test/attacks.fork.test.mjs` (state `version: v3`) and `test/worker.v3.http.test.mjs`.
+
 ## Layout
 | Path | What it does |
 |---|---|
 | `lib/` | JS port of the clerk's checks (parity-tested against `agent/check.py`) and the attack library |
 | `worker/` | Cloudflare Worker + one Durable Object (serialised sends, SQLite log and counts, rate limits), server-rendered page |
-| `deploy.mjs` | Idempotent deploy of the sandbox contracts and vendors (testnet or a local fork) |
+| `deploy.mjs` | Idempotent deploy of the sandbox contracts and vendors (testnet or a local fork; `--v3` for PayRunV3 + VendorRegistry) |
+| `sign_invoice.mjs` | The vendor's side of a PayRunV3 invoice: signs a document's line (EIP-712) and checks it with the contract's `checkInvoice` |
 | `watch_paid.mjs` | Read-only watcher: one log line per check, alerts on any `Paid` other than the seed run |
 | `test/` | Unit, fork and HTTP tests (HTTP tests run the Worker locally against an anvil fork) |

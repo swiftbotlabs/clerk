@@ -7,12 +7,16 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createPublicClient, http, stringToHex } from 'viem';
-import { KINDS } from '../lib/sandbox.mjs';
+import { kindsFor } from '../lib/sandbox.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname;
-const RPC = 'http://127.0.0.1:18546';
-const skip = !process.env.SANDBOX_WORKER || !existsSync(ROOT + 'work/fork-state.json') || !existsSync(ROOT + 'work/dev.vars');
-const st = skip ? {} : JSON.parse(readFileSync(ROOT + 'work/fork-state.json', 'utf8'));
+// r7: SANDBOX_FORK_RPC / SANDBOX_FORK_STATE / SANDBOX_DEV_VARS point it at another fork (defaults unchanged)
+const RPC = process.env.SANDBOX_FORK_RPC || 'http://127.0.0.1:18546';
+const STATE = process.env.SANDBOX_FORK_STATE || ROOT + 'work/fork-state.json';
+const VARS = process.env.SANDBOX_DEV_VARS || ROOT + 'work/dev.vars';
+const skip = !process.env.SANDBOX_WORKER || !existsSync(STATE) || !existsSync(VARS);
+const st = skip ? {} : JSON.parse(readFileSync(STATE, 'utf8'));
+const KINDS = kindsFor(st.version || 'v2');   // the kinds this deployment offers (v3 adds 15-17)
 const pub = createPublicClient({ transport: http(RPC) });
 const DUMMY = 'XXXX.DUMMY.TOKEN.XXXX';
 const ONLY = process.env.PHASES ? process.env.PHASES.split(',') : null;      // e.g. PHASES=2,4 (used by worker/scripts/controls.sh)

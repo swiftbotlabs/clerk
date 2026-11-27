@@ -1,0 +1,9 @@
+ACME SUPPLIES LTD
+Invoice No: INV-3001
+From: Acme Supplies Ltd
+Bill to: Swift Bot Labs
+Date: 2026-11-28
+Due date: 2026-12-20
+Item: 1 x label printer ribbon, 0.05
+Amount due: 0.05 tUSD8
+Pay to: __ACME__

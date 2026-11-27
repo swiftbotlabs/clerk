@@ -1,6 +1,6 @@
 // Server-rendered HTML for the sandbox. Everything readable with JavaScript off; the only script on the page is Cloudflare
 // Turnstile (needed to submit an attack). Every dynamic value goes through esc().
-import { KINDS } from '../../lib/sandbox.mjs';
+import { KINDS, kindsFor } from '../../lib/sandbox.mjs';
 
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
@@ -21,10 +21,22 @@ export const MENU = {
   duplicate_in_run: ['One run lists the same invoice twice.', 'Refused: the invoice is already in the run.'],
   zero_amount: ['A 0.00 line, to probe the checks.', 'Refused: zero amounts are not staged.'],
   genuine: ['A normal invoice to the vendor\'s registered wallet.', 'Accepted and staged (never paid here), so you can see the check is about the payee.'],
+  unsigned_invoice: ['A correct Acme line (right wallet, inside every cap), but Acme signs its invoices and this one carries no signature.', 'Refused: this vendor\'s invoices need its signature.'],
+  forged_signature: ['The same line with a signature made by some other key, not Acme\'s registered wallet.', 'Refused: the signature is not the vendor\'s.'],
+  edited_after_signing: ['Acme signed an invoice for 0.02; the line is staged for 0.05 with that signature.', 'Refused: the signature covers 0.02, not 0.05.'],
 };
+/** v3 wording where the registry is the payer's own vendor registry (wallet changes are edits to the vendor file). */
+const MENU_V3 = {
+  hijack_after_staging: ['A run is staged, then the vendor\'s wallet in the vendor registry is changed ("new bank details") before the owner pays.', 'Not paid: the payee changed after staging, so the run is closed.'],
+  new_payee_unconfirmed: ['The vendor registry gives a vendor a brand-new wallet; a run to it is staged and the owner pays.', 'Not paid: a new wallet waits out a 3-day hold unless the owner confirms it.'],
+  genuine: ['A normal invoice to the vendor\'s registered wallet, signed by the vendor.', 'Accepted and staged (never paid here), so you can see the checks are about the payee and the signature.'],
+};
+const menuOf = (cfg, k) => (cfg?.version === 'v3' && MENU_V3[k]) || MENU[k];
 
 export const ERRORS = {
-  PayeeNotRegistered: 'The wallet is not the one this vendor registered on chain (ERC-8004 identity registry).',
+  PayeeNotRegistered: 'The wallet is not the one registered for this vendor on chain.',
+  VendorSignatureRequired: 'This vendor signs its invoices, and the line carries no signature.',
+  BadVendorSignature: 'The signature is not the vendor\'s signature over exactly these values.',
   RunCapExceeded: 'The run total is over the per-run cap the owner set for this key.',
   DayCapExceeded: 'This key already staged its daily cap.',
   AlreadyPaid: 'This invoice was paid in an earlier run.',
@@ -36,7 +48,7 @@ export const ERRORS = {
   ZeroAmount: 'A zero-amount line is not staged.',
 };
 
-const ORDER = Object.entries(KINDS).sort((a, b) => (a[1].n || 99) - (b[1].n || 99)).map(([k]) => k);
+const orderOf = (cfg) => Object.entries(kindsFor(cfg?.version)).sort((a, b) => (a[1].n || 99) - (b[1].n || 99)).map(([k]) => k);
 const short = (h) => (h ? `${h.slice(0, 10)}…${h.slice(-4)}` : '');
 const units = (u) => (u === null || u === undefined ? 'unknown' : (Number(BigInt(u)) / 1e6).toFixed(2));
 
@@ -138,8 +150,9 @@ export function renderHome({ state, cfg, sitekey, limits }) {
   const c = state.counts || {};
   const tot = Object.values(c).reduce((a, r) => ({ attempts: a.attempts + r.attempts, refused: a.refused + r.refused, txs: a.txs + r.txs }), { attempts: 0, refused: 0, txs: 0 });
   const tre = state.treasury;
+  const ORDER = orderOf(cfg);
   const menu = ORDER.map((k, i) => {
-    const K = KINDS[k], [what, chain] = MENU[k];
+    const K = KINDS[k], [what, chain] = menuOf(cfg, k);
     return `<label><input type="radio" name="kind" value="${k}"${i === 0 ? ' checked' : ''}><span class="t"><span class="n">${K.n ? K.n + '.' : 'Control.'}</span>${esc(K.title.replace(/^Control: a/, 'A'))}</span>
 <span class="d">${esc(what)} <strong>${esc(chain)}</strong></span></label>`;
   }).join('\n');
@@ -171,11 +184,15 @@ ${form}
 ${logRows(cfg, state.attempts || [])}
 <h2>How it works</h2>
 <div class="item"><ul class="steps" style="padding-left:18px">
-<li>A separate PayRunV2 contract${cfg?.payrun ? ' (' + addrLink(cfg, cfg.payrun) + ')' : ''}, the same verified code as the main deployment, with its own test vendors registered in the ERC-8004 identity registry.</li>
+${cfg?.version === 'v3'
+    ? `<li>A separate PayRunV3 contract${cfg?.payrun ? ' (' + addrLink(cfg, cfg.payrun) + ')' : ''}, the same code as the testnet eval's, with its own test vendors in its own vendor registry${cfg?.registry ? ' (' + addrLink(cfg, cfg.registry) + ')' : ''}: Clerk's VendorRegistry contract, which answers the ERC-8004 <code>getAgentWallet</code> read.</li>
+<li>Acme signs its invoices (EIP-712, by its registered wallet), and the contract refuses an Acme line without Acme's signature over exactly its values.</li>`
+    : `<li>A separate PayRunV2 contract${cfg?.payrun ? ' (' + addrLink(cfg, cfg.payrun) + ')' : ''}, the same verified code as the main deployment, with its own test vendors registered in the ERC-8004 identity registry.</li>`}
 <li>Its treasury allows at most 0.10 tUSD8 to be spent, and only to registered vendors. Your text never chooses an address on chain.</li>
 <li>Before each transaction the sandbox simulates it. It sends only when the simulation shows the refusal it expects, with a fixed gas limit so the refused transaction still lands on chain where anyone can open it.</li>
 <li>The owner key pays only a run staged in the same attempt, and only after the contract says it will not pay. If it would pay, nothing is sent and the attempt shows as a fault.</li>
-<li>Off-chain checks (look-alike names, injected instructions, wallets that differ from the registry) run first, as in the real clerk. Here the line is staged anyway, so the contract has to refuse it on its own.</li></ul></div>`;
+<li>Off-chain checks (look-alike names, injected instructions, wallets that differ from the registry) run first, as in the real clerk. Here the line is staged anyway, so the contract has to refuse it on its own.</li></ul></div>
+${cfg?.history?.v2 ? '<p class="muted">The earlier sandbox on PayRunV2 (25 Nov onward) and its log: <a href="/history/v2">kept here, read-only</a>.</p>' : ''}`;
   return shell('Clerk sandbox', body, { turnstile: !off, cfg });
 }
 
@@ -197,7 +214,7 @@ function stepsHtml(cfg, rec) {
   }).join('')}</ol>`;
 }
 
-export function renderAttempt({ rec, detail, cfg, fresh }) {
+export function renderAttempt({ rec, detail, cfg, fresh, history = false }) {
   const good = rec.outcome === 'refused' || (rec.outcome === 'accepted');
   const head = rec.outcome === 'refused' ? 'Refused on chain' : rec.outcome === 'accepted'
     ? (rec.kind === 'genuine' ? 'Accepted: a genuine invoice is staged' : 'Accepted: your invoice named the registered wallet')
@@ -211,11 +228,18 @@ export function renderAttempt({ rec, detail, cfg, fresh }) {
 ${detail ? `<ul class="steps">${[...detail.reasons, ...detail.warnings].slice(0, 12).map((r) => `<li>${esc(String(r).slice(0, 300))}</li>`).join('')}</ul>
 <p class="muted" style="font-size:14px;margin:8px 0 0">Read from your text: vendor <strong>${esc(String(detail.proposed.vendor ?? '').slice(0, 80))}</strong>, amount ${esc(String(detail.proposed.amount ?? '').slice(0, 20))}, reference ${esc(String(detail.proposed.reference ?? '').slice(0, 40))}. Only you see this part; the public log keeps the result, not your text.</p>` : ''}</div>`;
   }
-  const body = `<p style="margin-top:24px"><a href="/">Back to the sandbox</a></p>
+  const body = `<p style="margin-top:24px"><a href="${history ? '/history/v2' : '/'}">${history ? 'Back to the PayRunV2 history' : 'Back to the sandbox'}</a></p>
 <div class="item result ${good ? 'ok' : 'stop'}"><span class="muted">Attempt #${rec.id} · ${esc((rec.at || '').replace('T', ' ').slice(0, 19))} UTC</span>
 <div class="headline">${esc(head)}</div><div>${esc(rec.title)}</div>${stepsHtml(cfg, rec)}</div>${off}
 ${fresh ? '<p><a href="/">Try another attack</a></p>' : ''}`;
   return shell(`Clerk sandbox attempt ${rec.id}`, body, { cfg });
+}
+
+/** The PayRunV2 sandbox's log, kept read-only after the move to PayRunV3. */
+export function renderHistory({ state, cfg }) {
+  const rows = logRows(cfg, state.attempts || []).replaceAll('href="/attempt/', 'href="/history/v2/attempt/');
+  return shell('Clerk sandbox: PayRunV2 history', `<p style="margin-top:24px"><a href="/">Back to the sandbox</a></p><h1>The PayRunV2 sandbox, kept as it was</h1>
+<p class="lede">Before the sandbox moved to PayRunV3, it ran on PayRunV2${cfg?.payrun ? ' (' + addrLink(cfg, cfg.payrun) + ')' : ''} with vendors in QDay's ERC-8004 registry. Its last ${(state.attempts || []).length} attempts are below, read-only; every transaction is still on the explorer.</p>${rows}`, { cfg });
 }
 
 export function renderLog({ state, cfg }) {

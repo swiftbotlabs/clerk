@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Static build of the approval page (docs/), hosted at https://clerk.swiftbotlab.workers.dev/. Read-only until a wallet connects; no keys, no server.
 #   e2e/build_pages.sh [v1 report.json]        V2_WITH=<report> merges a real clerk run on PayRunV2 into docs/report-v2.json
+#   With e2e/testnet_v3page.json (e2e/deploy_v3_page.sh): the page also pins that PayRunV3 and shows its runs (docs/report-v3.json;
+#   V3_WITH=<stage.py report> merges the clerk's own report for those runs, so each line shows its invoice text).
 set -euo pipefail; cd "$(dirname "$0")/.."
 mkdir -p docs/vendor
 cp web/index.html docs/index.html; cp web/app.js docs/app.js;
@@ -12,6 +14,22 @@ fi
 cp web/sim.js docs/sim.js; cp web/vendor/viem-2.21.0.js docs/vendor/
 cp "${1:-e2e/film/report3.json}" docs/report.json; touch docs/.nojekyll
 python3 e2e/report_v2.py docs/report-v2.json ${V2_WITH:+--with "$V2_WITH"}
+V3PAGE=${CLERK_V3PAGE:-e2e/testnet_v3page.json}; export CLERK_V3PAGE=$V3PAGE   # override only for a fork rehearsal
+if [ -f "$V3PAGE" ]; then
+  # pin the page's PayRunV3 in docs/app.js (the source keeps V3_PAGE = ''): exactly one marker, an address only
+  python3 - <<'PY'
+import json, re
+import os
+a = json.load(open(os.environ['CLERK_V3PAGE']))['payrun_v3']
+assert re.fullmatch(r'0x[0-9a-fA-F]{40}', a), 'payrun_v3 is not an address'
+p = 'docs/app.js'; s = open(p).read(); m = "const V3_PAGE = '';"
+assert s.count(m) == 1, 'V3_PAGE marker not found once'
+open(p, 'w').write(s.replace(m, f"const V3_PAGE = '{a}';"))
+PY
+  python3 e2e/report_v2.py docs/report-v3.json --v3 ${V3_WITH:+--with "$V3_WITH"}
+else
+  rm -f docs/report-v3.json
+fi
 # Response headers for Cloudflare static assets (the page also carries the same CSP as a meta tag; frame-ancestors only works here)
 cat > docs/_headers <<'EOF'
 /*
@@ -23,4 +41,4 @@ cat > docs/_headers <<'EOF'
 EOF
 python3 e2e/prerender.py docs/index.html
 if [ "${PAGES_DEV:-0}" != 1 ] && grep -n '127\.0\.0\.1\|localhost' docs/index.html docs/_headers; then echo "FAIL: a local origin is in the production page's CSP"; exit 1; fi
-echo "docs/ ready: index.html + app.js + report.json ($(python3 -c "import json;print(json.load(open('docs/report.json'))['payrun'])")) + report-v2.json + _headers"
+echo "docs/ ready: index.html + app.js + report.json ($(python3 -c "import json;print(json.load(open('docs/report.json'))['payrun'])")) + report-v2.json$([ -f docs/report-v3.json ] && echo ' + report-v3.json (PayRunV3 pinned)') + _headers"

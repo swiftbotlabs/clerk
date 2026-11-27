@@ -140,3 +140,49 @@ test('R2-1: IPv6 /48 key (IPv4 has none)', () => {
   assert.equal(net48Key('junk::1::2'), '');
   assert.deepEqual(limitsFrom({ LIMIT_NET48_HOUR: '50' }).net48Hour, 10, 'cannot be raised outside dev');
 });
+
+// ---- r7: the PayRunV3 sandbox config (version 'v3': registrar + vendor_acme keys, our own registry, the V2 log kept as history)
+import { WORKER_ROLES, versionOf } from '../worker/src/limits.mjs';
+import { ROLES_FOR, SENDERS_FOR, kindsFor, KINDS } from '../lib/sandbox.mjs';
+import { renderHistory } from '../worker/src/page.mjs';
+const keys3 = { owner: K('1'), clerk: K('2'), revoked: K('3'), expired: K('4'), stranger: K('5'), daycap: K('6'), registrar: K('7'), vendor_acme: K('8') };
+const cfg3 = { ...cfg, version: 'v3', history: { v2: { payrun: A('f') } } };
+const env3 = (o = {}) => ({ SANDBOX_CONFIG: JSON.stringify(cfg3), SANDBOX_KEYS: JSON.stringify(keys3), ...o });
+
+test('v3: the Worker role lists agree with lib/sandbox.mjs; vendor_acme signs but never sends', () => {
+  assert.deepEqual([...WORKER_ROLES.v2], ROLES_FOR.v2); assert.deepEqual([...WORKER_ROLES.v3], ROLES_FOR.v3);
+  assert.ok(!SENDERS_FOR.v3.includes('vendor_acme')); assert.equal(SENDERS_FOR.v3.length, 7); assert.equal(SENDERS_FOR.v2.length, 8);
+});
+test('v3: kinds 15-17 exist only in v3; every kind has a menu line', () => {
+  assert.equal(Object.keys(kindsFor('v2')).length, 15); assert.equal(Object.keys(kindsFor('v3')).length, 18);
+  assert.ok(!('unsigned_invoice' in kindsFor('v2'))); assert.ok('edited_after_signing' in kindsFor('v3'));
+  assert.equal(Object.keys(kindsFor(undefined)).length, 15, 'no version = the V2 sandbox');
+});
+test('v3 config: parses with the v3 roles; refuses v2 roles, a funder key, QDay\'s registry, an unknown version, a bad history', () => {
+  assert.equal(parseConfig(env3()).cfg.version, 'v3');
+  assert.equal(versionOf(parseConfig(env()).cfg), 'v2', 'the 25 Nov config (no version) is v2');
+  assert.throws(() => parseConfig(env3({ SANDBOX_KEYS: JSON.stringify(keys) })), /registrar|unexpected role/);
+  assert.throws(() => parseConfig(env3({ SANDBOX_KEYS: JSON.stringify({ ...keys3, funder: K('9') }) })), /unexpected role/);
+  assert.throws(() => parseConfig(env({ SANDBOX_KEYS: JSON.stringify(keys3) })), /vendor_hijack|unexpected role/, 'v2 config refuses v3 keys');
+  assert.throws(() => parseConfig(env3({ SANDBOX_CONFIG: JSON.stringify({ ...cfg3, registry: '0xF45E7f39Caba1d2055f613970575a7e7069636Be' }) })), /v3 registry/);
+  assert.throws(() => parseConfig(env3({ SANDBOX_CONFIG: JSON.stringify({ ...cfg3, version: 'v9' }) })), /version/);
+  assert.throws(() => parseConfig(env3({ SANDBOX_CONFIG: JSON.stringify({ ...cfg3, history: { v2: { payrun: 'javascript:1' } } }) })), /history/);
+  assert.throws(() => parseConfig(env3({ SANDBOX_CONFIG: JSON.stringify({ ...cfg3, history: { v1: { payrun: A('f') } } }) })), /history/);
+  assert.throws(() => parseConfig(env({ SANDBOX_CONFIG: JSON.stringify({ ...cfg, history: { v2: { payrun: A('f') } } }) })), /history/, 'history only on v3');
+});
+test('v3 public config: version + history, no keys', () => {
+  const p = publicConfigFrom(env3());
+  assert.equal(p.version, 'v3'); assert.equal(p.history.v2.payrun, A('f'));
+  assert.ok(!JSON.stringify(p).includes('1111111111111111'));
+});
+test('v3 pages: home shows the 18 kinds and the history link; history rows link under /history/v2 and escape values', () => {
+  const state = { attempts: [], counts: {}, treasury: '90000', off: false };
+  const h = renderHome({ state, cfg: publicConfigFrom(env3()), sitekey: 'x', limits: limitsFrom({}) });
+  for (const k of Object.keys(kindsFor('v3'))) assert.match(h, new RegExp(`value="${k}"`));
+  assert.match(h, /href="\/history\/v2"/); assert.match(h, /PayRunV3/);
+  const h2 = renderHome({ state, cfg: publicConfigFrom(env()), sitekey: 'x', limits: limitsFrom({}) });
+  assert.doesNotMatch(h2, /value="unsigned_invoice"|\/history\/v2/, 'v2 page unchanged');
+  const rec = { id: 3, kind: 'payee_swap', title: '<script>x</script>', outcome: 'refused', at: '2026-11-25T10:00:00Z', steps: [{ sent: true, hash: '0x' + 'a'.repeat(64), status: 'reverted', error: 'PayeeNotRegistered' }] };
+  const hist = renderHistory({ state: { attempts: [rec] }, cfg: { ...publicConfigFrom(env3()), payrun: A('f') } });
+  assert.match(hist, /href="\/history\/v2\/attempt\/3"/); assert.doesNotMatch(hist, /<script>x/); assert.doesNotMatch(hist, /href="\/attempt\//);
+});
