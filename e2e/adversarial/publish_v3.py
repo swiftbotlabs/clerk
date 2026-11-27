@@ -2,7 +2,8 @@
 
     python3 e2e/adversarial/publish_v3.py WORKDIR      # WORKDIR = the --work dir of testnet_eval.mjs --testnet --payrun v3 --set full
 
-Gates (any failure exits 1 and writes nothing): report.json is a testnet PayRunV3 run of the full set with signedOnly ON; 0 wrong
+Gates (any failure exits 1 and writes nothing): report.json is a testnet PayRunV3 run of the full set with signedOnly ON, against
+our own VendorRegistry; 0 wrong
 outcomes in its own score; genuine 55/55 (rules) and 30/55 (hostile); the judge rerun (sandbox/judge_rerun.mjs, public RPC,
 read-only) exits 0; b_compare.py against the published PayRunV2 run (testnet-eval.json) exits 0 (same attack lines, nothing refused
 before is accepted now). Then copies report.md -> TESTNET-EVAL-V3.md and report.json -> testnet-eval-v3.json and prints the
@@ -45,6 +46,8 @@ def main(argv: list[str]) -> int:
         die(f"report mode is {r.get('mode')}")
     if r.get("contract") != "PayRunV3" or r.get("signedOff"):
         die("not a PayRunV3 run with signedOnly on")
+    if r.get("registryKind") != "own" or not re.fullmatch(r"0x[0-9a-fA-F]{40}", r.get("registry") or ""):
+        die("not a run against our own VendorRegistry (the kit: keep the name-to-address mapping in your own contract)")
     if r.get("set") != "full" or r.get("subset", {}).get("files") != 160:
         die("not the full 160-invoice set")
     s = r["result"]["score"]
@@ -73,7 +76,7 @@ def main(argv: list[str]) -> int:
     b = r["result"]["B"]
     print(json.dumps({"txs": len(r["txs"]), "gas_tqday": s["gas_tqday"], "genuine_rules": "55/55", "genuine_hostile": "30/55",
                       "b_lines": len(b), "b_refused": sum(1 for x in b if x.get("hash")), "b_offchain_only": sum(1 for x in b if not x.get("hash")),
-                      "payruns": r["payruns"]}, indent=1))
+                      "payruns": r["payruns"], "registry": r["registry"]}, indent=1))
     print(c.stdout)
     print("copied: e2e/adversarial/TESTNET-EVAL-V3.md, e2e/adversarial/testnet-eval-v3.json")
     return 0

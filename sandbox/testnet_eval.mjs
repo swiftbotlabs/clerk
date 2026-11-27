@@ -32,6 +32,10 @@
 // registered wallet, a fake invoice's sender signs with its own attacker key) into <invoice>.sig.json; the pipeline holds a line
 // whose signature is missing or does not match and stages with stageSigned. Layer B tries each attack line both ways (signed
 // with the best signature the attacker has, and unsigned) and counts it as stopped on chain only if the contract refuses both.
+// --payrun v3 also deploys our own VendorRegistry (contracts/src/VendorRegistry.sol: ERC-8004 read interface, owner-curated writes),
+// as the Aevum Starter Kit asks while QDay's ERC-8004 registry is in internal testing; the owner registers the three eval vendors
+// there and the layer-C swaps are the owner re-pointing Acme's wallet (a social-engineered "new bank details" change). --registry qday
+// keeps QDay's registry instead.
 // Fork-only planted control: EVAL_V3_SIGNED_OFF=1 skips setSignedOnly (the off-chain-only attacks must then be accepted again).
 // Never prints a key. Testnet mode refuses any RPC but the public one, a gas price over 5 gwei, and leaves the funder at least
 // FUNDER_KEEP tQDAY (the sandbox's reserve); only the funder role is read from the funder keys file.
@@ -44,7 +48,8 @@ import { createPublicClient, createWalletClient, http, parseAbi, parseEventLogs,
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts';
 import { PAYRUN_ABI, REGISTRY_ABI, ERC20_ABI } from './lib/sandbox.mjs';
 
-const REG = '0xF45E7f39Caba1d2055f613970575a7e7069636Be';
+const QDAY_REG = '0xF45E7f39Caba1d2055f613970575a7e7069636Be';   // QDay's ERC-8004 registry (the PayRunV2 runs)
+let REG = QDAY_REG;   // PayRunV3 runs: our own VendorRegistry by default (--registry qday keeps QDay's)
 const TUSD = '0x456569838f1d43009A91ebA4263147Afd7233483';
 const TESTNET_RPC = 'https://rpc-test.qday.info';
 const EXPLORER = 'https://explorer-test.qday.info';
@@ -90,7 +95,8 @@ const FULL_FAMILIES = { legit: 30, redirect: 25, injection: 25, lookalike: 25, m
 // treasury 0.17M, vendor1 0.76M, vendor2 0.54M, vendor3 0.66M (recycles + sweeps included); rounded up, then funded x 1.3 at today's price
 const GAS_UNITS_FULL = { owner: 15_000_000n, clerk: 30_000_000n, treasury: 200_000n, vendor1: 1_200_000n, vendor2: 900_000n, vendor3: 900_000n };
 // PayRunV3 adds 6 setSignedOnly txs, a signature check per staged line and the 35 extra refusals: fork rehearsal (r6, 27 Nov, 288 txs,
-// 47.0M gas) measured owner 16.35M, clerk 28.35M, treasury 0.17M, vendor1 0.76M, vendor2 0.54M, vendor3 0.66M
+// 47.0M gas) measured owner 16.35M, clerk 28.35M, treasury 0.17M, vendor1 0.76M, vendor2 0.54M, vendor3 0.66M; with our own VendorRegistry
+// (the default, 289 txs, 46.1M gas) owner 17.50M (it deploys the registry and registers the vendors), clerk 27.37M, vendors 0.22-0.34M
 const GAS_UNITS_FULL_V3 = { ...GAS_UNITS_FULL, owner: 18_000_000n, clerk: 31_000_000n };
 const FLOAT_FULL = '2.5';
 if (args.includes('--budget')) { await budget(); process.exit(0); }
@@ -116,6 +122,11 @@ if (st.contract && st.contract !== (V3 ? 'PayRunV3' : 'PayRunV2')) die(`state fi
 const SIGNED_OFF = V3 && FORK && process.env.EVAL_V3_SIGNED_OFF === '1';   // fork-only planted control
 if (V3) { if (st.signedOff !== undefined && st.signedOff !== SIGNED_OFF) die('state file was started with another EVAL_V3_SIGNED_OFF'); st.signedOff = SIGNED_OFF; }
 if (!SWEEP_ONLY) st.contract = V3 ? 'PayRunV3' : 'PayRunV2';
+const OWN_REG = V3 && opt('--registry', st.registryKind || 'own') === 'own';
+if (V3 && !['own', 'qday'].includes(opt('--registry', 'own'))) die('--registry is own or qday');
+if (!V3 && opt('--registry', 'qday') !== 'qday') die('--registry own needs --payrun v3');
+if (st.registryKind && st.registryKind !== (OWN_REG ? 'own' : 'qday')) die(`state file was started with --registry ${st.registryKind}`);
+if (V3) st.registryKind = OWN_REG ? 'own' : 'qday';
 st.mode = FORK ? 'fork' : 'testnet'; st.rpc = rpc; if (!SWEEP_ONLY) st.set = SET;
 if (FORK && /^\d{1,9}$/.test(process.env.EVAL_MARGIN_UNITS || '')) MARGIN = BigInt(process.env.EVAL_MARGIN_UNITS);   // fork-only (positive controls)
 const keysFile = opt('--keys'), funderFile = opt('--funder-keys');
@@ -274,16 +285,41 @@ for (const [role, amt] of Object.entries(st.gasPlan)) await send(`gas_${role}`, 
 await send('tusd_treasury', 'funder', { address: TUSD, abi: ERC20_ABI, functionName: 'transfer', args: [A.treasury.address, FLOAT] });
 st.steps.fund_done = { at: new Date().toISOString() }; save();
 
-// ------------------------------------------------------------------------------------------------ 2. vendors in the real ERC-8004 registry
+// ------------------------------------------------------------------------------------------------ 2. vendors in the registry
+// PayRunV3 runs: our own VendorRegistry, deployed by the owner (the payer's vendor master file); PayRunV2 runs: QDay's ERC-8004 registry
+const regArt = OWN_REG ? JSON.parse(readFileSync(APP + 'contracts/out/VendorRegistry.sol/VendorRegistry.json', 'utf8')) : null;
+if (OWN_REG) {
+  if (!st.steps.deploy_registry) {
+    st.steps.deploy_registry = { inflight: true }; save();
+    const hash = await W('owner').deployContract({ abi: regArt.abi, bytecode: regArt.bytecode.object, args: [A.owner.address], gasPrice: await gasPrice(), type: 'legacy' });
+    st.steps.deploy_registry = { inflight: true, hash, from: 'owner', label: 'deploy VendorRegistry (our own vendor registry)', layer: 'setup' }; save();
+    const rc = await pub.waitForTransactionReceipt({ hash, timeout: 180_000 });
+    if (rc.status !== 'success' || !rc.contractAddress) die(`deploy_registry failed (${hash})`);
+    const rec = { hash, status: rc.status, block: rc.blockNumber.toString(), gasUsed: rc.gasUsed.toString(), fee: (rc.gasUsed * rc.effectiveGasPrice).toString(),
+      from: 'owner', label: 'deploy VendorRegistry (our own vendor registry)', layer: 'setup', contractAddress: rc.contractAddress };
+    st.steps.deploy_registry = rec; st.txs.push({ step: 'deploy_registry', ...rec }); save();
+    log(`ok   deploy_registry ${rc.contractAddress} ${hash}`);
+  }
+  REG = st.steps.deploy_registry.contractAddress;
+  st.registry = REG; save();
+}
 const vendorIds = {};
 for (const v of [1, 2, 3]) {
   const name = truth.vendors[String(v)];
   const doc = { type: 'https://eips.ethereum.org/EIPS/eip-8004#registration-v1', name, description: 'Clerk adversarial eval vendor (testnet only)' };
   const uri = 'data:application/json;base64,' + Buffer.from(JSON.stringify(doc)).toString('base64');
+  if (OWN_REG) {
+    const rec = await send(`register_vendor${v}`, 'owner', { address: REG, abi: regArt.abi, functionName: 'register', args: [uri, A[`vendor${v}`].address], gas: 400_000n },
+      { label: `owner registers vendor${v} (${name}) in our vendor registry` });
+    const t = events(rec, regArt.abi).find((l) => l.eventName === 'Registered' && l.args.wallet?.toLowerCase() === A[`vendor${v}`].address.toLowerCase());
+    if (!t) die(`vendor${v}: no Registered event`);
+    vendorIds[v] = t.args.agentId.toString();
+  } else {
   const rec = await send(`register_vendor${v}`, `vendor${v}`, { address: REG, abi: REGISTRY_ABI, functionName: 'register', args: [uri], gas: 400_000n });
   const t = events(rec, REGISTRY_ABI).find((l) => l.eventName === 'Transfer' && l.args.to?.toLowerCase() === A[`vendor${v}`].address.toLowerCase());
   if (!t) die(`vendor${v}: no Transfer event`);
   vendorIds[v] = t.args.tokenId.toString();
+  }
   const w = await pub.readContract({ address: REG, abi: REGISTRY_ABI, functionName: 'getAgentWallet', args: [BigInt(vendorIds[v])] });
   if (w.toLowerCase() !== A[`vendor${v}`].address.toLowerCase() && !st.steps.swap_s1_repoint) die(`vendor${v}: registered wallet is ${w}, expected its own key`);
 }
@@ -433,6 +469,13 @@ for (const l of st.steps.hostile_lines.lines) {
 async function repoint(step, newRole) {
   if (st.steps[step]) { log(`skip ${step}`); return st.steps[step]; }
   const nw = A[newRole];
+  if (OWN_REG) {   // our registry: the owner's vendor master record is changed (e.g. a social-engineered "new bank details" request)
+    const rec = await send(step, 'owner', { address: REG, abi: regArt.abi, functionName: 'setAgentWallet', args: [BigInt(vendorIds[1]), nw.address], gas: GAS_REG },
+      { label: `swap: Acme's wallet in our vendor registry re-pointed to ${newRole === 'vendor1' ? 'its old wallet (A)' : 'an attacker wallet (B)'}`, layer: 'C' });
+    const w = await pub.readContract({ address: REG, abi: REGISTRY_ABI, functionName: 'getAgentWallet', args: [BigInt(vendorIds[1])] });
+    if (w.toLowerCase() !== nw.address.toLowerCase()) die(`${step}: registry wallet is ${w}`);
+    return rec;
+  }
   const deadline = (await pub.getBlock()).timestamp + 300n;
   const signature = await nw.signTypedData({
     domain: { name: 'ERC8004IdentityRegistry', version: '1', chainId: 44005, verifyingContract: REG },
@@ -663,7 +706,7 @@ function writeReport() {
   L.push('');
   const full = st.subset.files === 160;
   L.push(`Run ${R.at}. ${full ? 'All 160 invoices of the seeded corpus (seed 8004), the same families and counts as the local eval (e2e/reports/adversarial-eval-2026-11-22.md)' : `${st.subset.files} invoices from the seeded 160-invoice corpus (seed 8004; every attack family, both duplicate kinds, every injection goal)`}, amounts scaled 1/${SCALE} to fit test-token budgets (per-run cap ${formatUnits(PER_RUN, 6)} tUSD8 = the local eval's 500 scaled the same way).`
-    + ` Real ERC-8004 registry ${addrLink(REG)}, real tUSD8 ${addrLink(TUSD)}, ${st.contract === 'PayRunV3' ? `two fresh PayRunV3 (PayRunV2 plus vendor-signed invoices; the three vendors marked signedOnly${st.signedOff ? ': NO, planted control run' : ''})` : 'two fresh PayRunV2 (same bytecode as Clerk\'s)'}: hostile-extractor ${addrLink(st.payruns.hostile)}, rules-extractor ${addrLink(st.payruns.rules)}.`
+    + ` ${st.registry ? `Vendors in our own vendor registry ${addrLink(st.registry)} (VendorRegistry: the ERC-8004 getAgentWallet interface, owner-curated, as the Aevum Starter Kit asks while QDay's ERC-8004 registry is in internal testing)` : `Real ERC-8004 registry ${addrLink(REG)}`}, real tUSD8 ${addrLink(TUSD)}, ${st.contract === 'PayRunV3' ? `two fresh PayRunV3 (PayRunV2 plus vendor-signed invoices; the three vendors marked signedOnly${st.signedOff ? ': NO, planted control run' : ''})` : 'two fresh PayRunV2 (same bytecode as Clerk\'s)'}: hostile-extractor ${addrLink(st.payruns.hostile)}, rules-extractor ${addrLink(st.payruns.rules)}.`
     + ` The owner is a rubber stamp: it executes every run the clerk stages without reading it. Every number below is read back from the chain (Paid events and balances).`);
   L.push('');
   L.push('## Outcome (scored from the chain)');
@@ -732,7 +775,8 @@ function writeReport() {
     L.push(`| **All** | ${tot.n} | **${tot.r}** | **${tot.o}** | |`);
     L.push('');
   }
-  L.push('## C. Registry wallet swaps on the real ERC-8004 registry (rubber-stamp owner executes)');
+  L.push(st.registry ? '## C. Vendor wallet swaps in the vendor registry (the record changed after a "new bank details" request; rubber-stamp owner executes)'
+    : '## C. Registry wallet swaps on the real ERC-8004 registry (rubber-stamp owner executes)');
   L.push('| Scenario | Txs | Result |'); L.push('|---|---|---|');
   const why = { 1: 'payee on hold', 2: 'staged during a hold: owner must confirm', 3: 'payee changed after staging: run closed' };
   for (const c of R.C) L.push(`| ${c.scenario} | ${['swap', 'stage', 'execute'].filter((k) => c[k]).map((k) => `${k} ${link(c[k])}`).join(', ')} | ${c.paid ? `PAID ${c.paid}` : 'nothing paid'}; PaymentBlocked(${c.blocked.map((r) => `${r}: ${why[r]}`).join(', ')})${c.closed ? '; run closed' : ''} |`);
@@ -747,7 +791,7 @@ function writeReport() {
   L.push('');
   L.push(`Check it read-only (no keys): \`cd sandbox && npm run judge:testnet-eval\` re-reads every transaction above from the public RPC and re-derives the outcome table. Corpus: \`e2e/adversarial/gen.py --seed 8004 --scale 1000 --wallets <the vendor and attacker addresses in testnet-eval.json>\`, then \`e2e/adversarial/tn_plan.py ${full ? 'full' : 'subset'}\` (truth.json sha256 ${st.corpusSha || 'n/a'}).`);
   writeFileSync(`${work}/report.md`, L.join('\n') + '\n');
-  writeFileSync(`${work}/report.json`, JSON.stringify({ mode: st.mode, ...(st.contract === 'PayRunV3' ? { contract: 'PayRunV3', signedOff: !!st.signedOff } : {}), set: st.set || (st.subset.files === 16 ? 'subset' : 'full'), corpusSha: st.corpusSha || null,
+  writeFileSync(`${work}/report.json`, JSON.stringify({ mode: st.mode, ...(st.contract === 'PayRunV3' ? { contract: 'PayRunV3', signedOff: !!st.signedOff, registry: st.registry || QDAY_REG, registryKind: st.registryKind || 'qday' } : {}), set: st.set || (st.subset.files === 16 ? 'subset' : 'full'), corpusSha: st.corpusSha || null,
     scale: SCALE, perRun: PER_RUN.toString(), perDay: PER_DAY.toString(), float: st.float || null, payruns: st.payruns, vendorIds: st.vendorIds, addresses: st.addresses, subset: st.subset,
     result: st.result, txs: st.txs }, (k, v) => (typeof v === 'bigint' ? v.toString() : v), 1));
   log(`report: ${work}/report.md`);

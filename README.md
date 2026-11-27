@@ -45,6 +45,7 @@ flowchart LR
 | `contracts/test/` | 9 unit tests, 10 property tests (5 fuzzed at 256 runs: run cap, day cap, wrong payee for any address and agent id, owner-only actions for any caller, exact totals) + fork tests against the real Aevum ERC-8004 registry, EntryPoint v0.7 and Kernel v3.1 |
 | `contracts/test/PayRunV2*.t.sol` | 38 tests for PayRunV2: the 19 above re-run against it, plus 19 for the hold (4 fuzzed, including A to B to A) |
 | `contracts/src/PayRunV3.sol` | PayRunV2 plus **vendor-signed invoices** (below): for a vendor marked `signedOnly`, a line is staged only with the vendor's EIP-712 signature over exactly its values. Every PayRunV2 test passes on it unchanged (`test/v3compat`) |
+| `contracts/src/VendorRegistry.sol` | Our own vendor registry (the kit: "keep the name-to-address mapping in your own contract"): ERC-8004 `getAgentWallet` / `tokenURI` reads, owner-curated writes with events. PayRunV3 points at it |
 | `contracts/script/sig_controls.sh` | Revert control for the signature check: 9 broken versions, each must turn the tests red |
 | `contracts/script/hold_controls.sh` | Revert control: switches each hold rule off in turn, expects tests to fail, restores the source byte for byte, expects all green |
 | `contracts/script/match_onchain.py` | Shows the deployed PayRun is this source: compiles it, reads the runtime bytecode from the chain, compares byte for byte (metadata hash included) |
@@ -208,6 +209,7 @@ due date or vendor the model altered, and an amount edited inside the document. 
   values (`BadVendorSignature`). A signature for another payer, chain, amount, invoice, due date or vendor fails; so do high-s and
   malformed signatures. Pay-once still applies to signed invoices.
 - The payee-change hold still applies: a hijacked registry entry can sign with the attacker's new wallet, and that wallet still waits.
+- Vendors are read from our own `VendorRegistry` (see "Whose ERC-8004 registry" below); a wallet change there is a payee change.
 - `stage.py --signed` reads the signatures, asks the contract (`checkInvoice`, read-only) and holds a line whose signature is missing or
   does not match, so one bad line never sinks a whole run.
 
@@ -240,6 +242,7 @@ Requirements: Foundry (`forge`, `cast`, `anvil`), Python 3.11+, a Solidity 0.8.2
 cd contracts && forge test --no-match-path 'test/fork/*'    # unit + property tests (PayRun 19, PayRunV2 38, PayRunV3 13, PayRunV2 suite on V3 38, ...)
 script/hold_controls.sh                                      # revert control for the payee-change hold
 script/sig_controls.sh                                       # revert control for vendor-signed invoices (PayRunV3)
+script/registry_controls.sh                                  # revert control for our own vendor registry
 python3 script/match_onchain.py                              # deployed bytecode == this source
 forge test --match-path 'test/fork/*' --fork-url https://rpc-test.qday.info   # against the real registry
 cd ../agent/tests && python3 test_check.py && python3 test_stage.py && python3 test_reconcile.py && python3 test_signed.py   # check.py, stage.py, reconcile.py
@@ -283,9 +286,14 @@ Environment: `AEVUM_RPC` (default `https://rpc-test.qday.info`), `AEVUM_REGISTRY
 that deployed tUSD8. The Aevum Starter Kit docs ([aevum-starter-kit.vercel.app/docs](https://aevum-starter-kit.vercel.app/docs), Confirmation
 of Payee track) listed it on 17 Nov as "an ERC-8004-style identity registry ... (found on chain, not in QDay's docs yet)" and, read again on
 27 Nov, say "QDay's ERC-8004 registry is still in internal testing and isn't open for this challenge, so keep the name-to-address mapping in
-your own contract." Its `register()` is permissionless on chain, which is how our test vendors #1698/#1699 registered. Clerk depends only on
-`getAgentWallet(agentId)` (the `IAgentIdentity` interface): every PayRun takes the registry address at deploy, and the local eval runs the
-same contracts against our own registry (`contracts/test/eval/EvalRegistry.sol`).
+your own contract." Its `register()` is permissionless on chain, which is how our test vendors #1698/#1699 registered for PayRun and PayRunV2; those
+deployments and the 26 Nov PayRunV2 eval stay as published, against QDay's registry.
+
+**From PayRunV3 on, vendor identities live in our own registry contract {V3_REGISTRY}, as the starter kit asks; it exposes the ERC-8004
+`getAgentWallet` interface, so Clerk can point at QDay's registry the day it opens.** That contract is `contracts/src/VendorRegistry.sol`:
+the payer's vendor master file on chain. Only its owner (the payer) registers a vendor or changes its payout wallet, every change is an
+event, and a wallet change is exactly the payee change PayRunV2/V3's hold reacts to (tested with A -> B -> A in `VendorRegistry.t.sol`;
+`script/registry_controls.sh` breaks it 5 ways, each turns tests red). Every PayRun takes the registry address at deploy.
 
 Live refusals on testnet (eth_call against the deployed PayRun, 20 Nov): the clerk's key calling `execute(3)` -> `NotOwner`; the clerk staging 5.00 -> `RunCapExceeded(5000000, 2500000)`; the clerk staging Acme's agentId with the attacker's wallet -> `PayeeNotRegistered`; a stranger staging -> `NoSession`; the owner's bare key (not the smart account) -> `NotOwner`; the smart account paying run 3 again -> `NotStaged(3)`.
 

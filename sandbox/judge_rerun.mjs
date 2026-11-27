@@ -77,7 +77,8 @@ for (const [i, t] of R.txs.entries()) {
   if (String(rc.gasUsed) !== String(t.gasUsed)) errs.push(`gasUsed ${rc.gasUsed} != ${t.gasUsed}`);
   if (t.step?.startsWith('deploy_')) {
     const mode = t.step.slice(7);
-    if (lc(rc.contractAddress || '') !== lc(R.payruns[mode] || '')) errs.push(`deploy created ${rc.contractAddress}, report says ${R.payruns[mode]}`);
+    const want = mode === 'registry' ? R.registry : R.payruns[mode];   // our own VendorRegistry (PayRunV3 runs) or a PayRun
+    if (lc(rc.contractAddress || '') !== lc(want || '')) errs.push(`deploy created ${rc.contractAddress}, report says ${want}`);
   }
   if (errs.length) bad(`tx ${i + 1} ${t.label}: ${errs.join('; ')}`); else txOk++;
   if (rc.blockNumber > lastBlock) lastBlock = rc.blockNumber;
@@ -103,6 +104,22 @@ for (const mode of ['hostile', 'rules']) {
     if (!same) bad(`${mode} ${CN} ${P}: code on chain differs from contracts/out/${CN} (rebuilt with a different compiler/settings?)`);
     else console.log(`   ${mode} ${P}: same code as the repo's ${CN} (immutables masked), owner = eval owner`);
   } else console.log(`   ${mode} ${P}: owner = eval owner; code comparison skipped (run \`cd contracts && forge build\` first)`);
+}
+
+if (R.registryKind === 'own') {   // PayRunV3 runs: vendors live in our own VendorRegistry; check its code, its owner and the PayRuns' pointer
+  const regArtPath = APP + 'contracts/out/VendorRegistry.sol/VendorRegistry.json';
+  const regOwner = await pub.readContract({ address: R.registry, abi: parseAbi(['function owner() view returns (address)']), functionName: 'owner' });
+  if (lc(regOwner) !== lc(R.addresses.owner)) bad(`VendorRegistry ${R.registry} owner ${regOwner} is not the eval owner`);
+  for (const mode of ['hostile', 'rules']) {
+    const r = await pub.readContract({ address: R.payruns[mode], abi: parseAbi(['function registry() view returns (address)']), functionName: 'registry' });
+    if (lc(r) !== lc(R.registry)) bad(`${mode} ${CN} reads registry ${r}, not the report's ${R.registry}`);
+  }
+  if (existsSync(regArtPath)) {
+    const ra = JSON.parse(readFileSync(regArtPath, 'utf8'));
+    const code = await pub.getCode({ address: R.registry });
+    if (!code || code.toLowerCase() !== ra.deployedBytecode.object.toLowerCase()) bad(`VendorRegistry ${R.registry}: code on chain differs from contracts/out/VendorRegistry`);
+    else console.log(`   our vendor registry ${R.registry}: same code as the repo's VendorRegistry, owner = eval owner, both PayRuns point at it`);
+  } else console.log(`   our vendor registry ${R.registry}: owner = eval owner, both PayRuns point at it; code comparison skipped`);
 }
 
 // ------------------------------------------------------------------ 3. corpus
