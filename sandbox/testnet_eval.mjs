@@ -27,6 +27,12 @@
 // Idempotent: each step's result is saved in the state file before the next one; a re-run skips finished steps. A step whose tx
 // was in flight when the run died is marked 'inflight' with its hash: on the next run, a mined one is recorded from its receipt
 // (never resent), a pending one stops the run; one the node never saw needs a nonce check, then --clear-inflight.
+// --payrun v3: the same eval against PayRunV3 (vendor-signed invoices). The owner marks the three vendors signedOnly; each
+// invoice's issuer signs it (EIP-712, see e2e/adversarial/tn_plan.py sigdata: a real vendor signs its true invoice with its
+// registered wallet, a fake invoice's sender signs with its own attacker key) into <invoice>.sig.json; the pipeline holds a line
+// whose signature is missing or does not match and stages with stageSigned. Layer B tries each attack line both ways (signed
+// with the best signature the attacker has, and unsigned) and counts it as stopped on chain only if the contract refuses both.
+// Fork-only planted control: EVAL_V3_SIGNED_OFF=1 skips setSignedOnly (the off-chain-only attacks must then be accepted again).
 // Never prints a key. Testnet mode refuses any RPC but the public one, a gas price over 5 gwei, and leaves the funder at least
 // FUNDER_KEEP tQDAY (the sandbox's reserve); only the funder role is read from the funder keys file.
 import { readFileSync, writeFileSync, existsSync, chmodSync, mkdirSync, renameSync, mkdtempSync, rmSync } from 'node:fs';
@@ -57,7 +63,7 @@ const ADMIN_ABI = parseAbi(['function confirmPayee(uint256,address)', 'function 
   'event PayeeConfirmed(uint256 indexed agentId, address indexed wallet, address indexed by, uint64 releaseAt)',
   'error ConfirmMismatch(uint256 agentId, address wallet, address registered)', 'error AlreadyTrusted(uint256 agentId, address wallet)',
   'error BadSession()', 'error TransferFailed(uint256 line)']);
-const ABI = [...PAYRUN_ABI, ...ADMIN_ABI];
+let ABI = [...PAYRUN_ABI, ...ADMIN_ABI];   // PayRunV3: replaced by the artifact's ABI (a superset) once it is loaded
 
 const args = process.argv.slice(2);
 const opt = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
@@ -83,6 +89,9 @@ const FULL_FAMILIES = { legit: 30, redirect: 25, injection: 25, lookalike: 25, m
 // gas units per role for the full set: the fork rehearsal (r5, 26 Nov, 247 txs, 44.5M gas) measured owner 14.69M, clerk 27.49M,
 // treasury 0.17M, vendor1 0.76M, vendor2 0.54M, vendor3 0.66M (recycles + sweeps included); rounded up, then funded x 1.3 at today's price
 const GAS_UNITS_FULL = { owner: 15_000_000n, clerk: 30_000_000n, treasury: 200_000n, vendor1: 1_200_000n, vendor2: 900_000n, vendor3: 900_000n };
+// PayRunV3 adds 6 setSignedOnly txs, a signature check per staged line and the 35 extra refusals: fork rehearsal (r6, 27 Nov, 288 txs,
+// 47.0M gas) measured owner 16.35M, clerk 28.35M, treasury 0.17M, vendor1 0.76M, vendor2 0.54M, vendor3 0.66M
+const GAS_UNITS_FULL_V3 = { ...GAS_UNITS_FULL, owner: 18_000_000n, clerk: 31_000_000n };
 const FLOAT_FULL = '2.5';
 if (args.includes('--budget')) { await budget(); process.exit(0); }
 if ([FORK, TESTNET, REPORT].filter(Boolean).length !== 1) die('pass exactly one of --fork / --testnet / --report');
@@ -101,6 +110,12 @@ const rpc = opt('--rpc', TESTNET ? TESTNET_RPC : 'http://127.0.0.1:18547');
 if (FORK && !/^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(rpc)) die('fork mode needs a local anvil RPC');
 if (TESTNET && rpc !== TESTNET_RPC) die('testnet mode only talks to ' + TESTNET_RPC);
 if (st.mode && st.mode !== (FORK ? 'fork' : 'testnet')) die(`state file is from a ${st.mode} run`);
+const V3 = (opt('--payrun', st.contract === 'PayRunV3' ? 'v3' : 'v2')) === 'v3';
+if (!['v2', 'v3'].includes(opt('--payrun', 'v2'))) die('--payrun is v2 or v3');
+if (st.contract && st.contract !== (V3 ? 'PayRunV3' : 'PayRunV2')) die(`state file is from a ${st.contract} run`);
+const SIGNED_OFF = V3 && FORK && process.env.EVAL_V3_SIGNED_OFF === '1';   // fork-only planted control
+if (V3) { if (st.signedOff !== undefined && st.signedOff !== SIGNED_OFF) die('state file was started with another EVAL_V3_SIGNED_OFF'); st.signedOff = SIGNED_OFF; }
+if (!SWEEP_ONLY) st.contract = V3 ? 'PayRunV3' : 'PayRunV2';
 st.mode = FORK ? 'fork' : 'testnet'; st.rpc = rpc; if (!SWEEP_ONLY) st.set = SET;
 if (FORK && /^\d{1,9}$/.test(process.env.EVAL_MARGIN_UNITS || '')) MARGIN = BigInt(process.env.EVAL_MARGIN_UNITS);   // fork-only (positive controls)
 const keysFile = opt('--keys'), funderFile = opt('--funder-keys');
@@ -277,28 +292,69 @@ const IDS = `1:${vendorIds[1]},2:${vendorIds[2]},3:${vendorIds[3]}`;
 log(`vendors: ${JSON.stringify(vendorIds)}`);
 
 // ------------------------------------------------------------------------------------------------ 3. one fresh PayRunV2 per extractor mode
-const artPath = FORK && process.env.EVAL_PAYRUN_ARTIFACT ? process.env.EVAL_PAYRUN_ARTIFACT : APP + 'contracts/out/PayRunV2.sol/PayRunV2.json';   // override: fork-only (planted controls)
+const CN = V3 ? 'PayRunV3' : 'PayRunV2';
+const artPath = FORK && process.env.EVAL_PAYRUN_ARTIFACT ? process.env.EVAL_PAYRUN_ARTIFACT : APP + `contracts/out/${CN}.sol/${CN}.json`;   // override: fork-only (planted controls)
 const art = JSON.parse(readFileSync(artPath, 'utf8'));
+if (V3) {
+  if (!art.abi.some((x) => x.name === 'stageSigned')) die(`${artPath} is not a PayRunV3 artifact`);
+  ABI = [...art.abi, ...ADMIN_ABI.filter((x) => !art.abi.some((y) => y.type === x.type && y.name === x.name))];
+}
 const payruns = {};
 for (const mode of ['hostile', 'rules']) {
   if (!st.steps[`deploy_${mode}`]) {
     st.steps[`deploy_${mode}`] = { inflight: true }; save();
     const hash = await W('owner').deployContract({ abi: art.abi, bytecode: art.bytecode.object, args: [TUSD, REG, A.owner.address, A.treasury.address], gasPrice: await gasPrice(), type: 'legacy' });
-    st.steps[`deploy_${mode}`] = { inflight: true, hash, from: 'owner', label: `deploy PayRunV2 (${mode} extractor)`, layer: 'setup' }; save();
+    st.steps[`deploy_${mode}`] = { inflight: true, hash, from: 'owner', label: `deploy ${CN} (${mode} extractor)`, layer: 'setup' }; save();
     const rc = await pub.waitForTransactionReceipt({ hash, timeout: 180_000 });
     if (rc.status !== 'success' || !rc.contractAddress) die(`deploy_${mode} failed (${hash})`);
     const rec = { hash, status: rc.status, block: rc.blockNumber.toString(), gasUsed: rc.gasUsed.toString(), fee: (rc.gasUsed * rc.effectiveGasPrice).toString(),
-      from: 'owner', label: `deploy PayRunV2 (${mode} extractor)`, layer: 'setup', contractAddress: rc.contractAddress };
+      from: 'owner', label: `deploy ${CN} (${mode} extractor)`, layer: 'setup', contractAddress: rc.contractAddress };
     st.steps[`deploy_${mode}`] = rec; st.txs.push({ step: `deploy_${mode}`, ...rec }); save();
     log(`ok   deploy_${mode} ${rc.contractAddress} ${hash}`);
   }
   const P = payruns[mode] = st.steps[`deploy_${mode}`].contractAddress;
   await send(`approve_${mode}`, 'treasury', { address: TUSD, abi: ERC20_ABI, functionName: 'approve', args: [P, BUDGET[mode]] });
   for (const v of [1, 2, 3]) await send(`confirm_${mode}_vendor${v}`, 'owner', { address: P, abi: ABI, functionName: 'confirmPayee', args: [BigInt(vendorIds[v]), A[`vendor${v}`].address] });
+  if (V3 && !SIGNED_OFF) for (const v of [1, 2, 3]) await send(`signedonly_${mode}_vendor${v}`, 'owner', { address: P, abi: ABI, functionName: 'setSignedOnly', args: [BigInt(vendorIds[v]), true] },
+    { label: `${mode}: owner marks vendor${v} 'signs its invoices' (setSignedOnly)` });
   if (!st.steps[`grant_${mode}`]) st.grantExpiry = st.grantExpiry || ((await pub.getBlock()).timestamp + 14n * 86400n).toString();
   await send(`grant_${mode}`, 'owner', { address: P, abi: ABI, functionName: 'grantSession', args: [A.clerk.address, BigInt(st.grantExpiry), PER_RUN, PER_DAY] });
 }
 st.payruns = payruns; save();
+
+// ------------------------------------------------------------------------------------------------ PayRunV3: each issuer signs its invoices
+const SIG = { hostile: {}, rules: {} };
+const signInvoice = (role, P, v) => A[role].signTypedData({
+  domain: { name: 'Clerk PayRun', version: '3', chainId: 44005, verifyingContract: P },
+  types: { Invoice: [{ name: 'payeeAgentId', type: 'uint256' }, { name: 'payee', type: 'address' }, { name: 'amount', type: 'uint128' },
+    { name: 'invoiceHash', type: 'bytes32' }, { name: 'dueDate', type: 'uint32' }] },
+  primaryType: 'Invoice', message: { payeeAgentId: BigInt(v.payeeAgentId), payee: v.payee, amount: BigInt(v.amount), invoiceHash: v.invoiceHash, dueDate: Number(v.dueDate) } });
+const sidecar = (path, signature) => writeFileSync(path, JSON.stringify({ signature }) + '\n');
+if (V3) {
+  if (!st.steps.sigdata) {
+    const out = `${work}/sigdata.json`;
+    py(['sigdata', '--ids', IDS, '--corpus', sub, '--wallets', wallets, '--out', out]);
+    st.steps.sigdata = JSON.parse(readFileSync(out, 'utf8')); save();
+  }
+  for (const mode of ['hostile', 'rules']) {
+    let n = 0;
+    for (const r of st.steps.sigdata.records) {
+      if (!ROLES.includes(r.signer)) die(`sigdata: unknown signer ${r.signer}`);
+      const signature = await signInvoice(r.signer, payruns[mode], r);   // deterministic (RFC 6979): a resumed run writes the same bytes
+      SIG[mode][r.file] = { ...r, signature };
+      sidecar(`${sub}/${mode}/${r.file}.sig.json`, signature); n++;
+    }
+    // the contract itself must accept a genuine vendor signature (independent EIP-712 implementations must agree)
+    const g = st.steps.sigdata.records.find((r) => r.cls === 'legit');
+    const [req, valid] = await pub.readContract({ address: payruns[mode], abi: ABI, functionName: 'checkInvoice',
+      args: [{ payeeAgentId: BigInt(g.payeeAgentId), payee: g.payee, amount: BigInt(g.amount), invoiceHash: g.invoiceHash, invoiceRef: '0x' + '0'.repeat(64) },
+        { dueDate: Number(g.dueDate), signature: SIG[mode][g.file].signature }] });
+    if (!valid || req === SIGNED_OFF) die(`${mode}: checkInvoice on a genuine signature says required=${req} valid=${valid}`);
+    log(`${mode}: ${n} invoices signed by their issuers (genuine signature verified on chain${SIGNED_OFF ? '; CONTROL: signedOnly OFF' : ''})`);
+  }
+}
+const stageCall = (L, lines) => (V3 ? { functionName: 'stageSigned', args: [L, lines.map((l) => ({ dueDate: Number(l.dueDate), signature: l.signature }))] }
+  : { functionName: 'stage', args: [L] });
 
 // ------------------------------------------------------------------------------------------------ layer A: the pipeline + rubber-stamp owner
 async function pipeline(mode, dir, extractor, tag, posExtra = []) {
@@ -309,6 +365,7 @@ async function pipeline(mode, dir, extractor, tag, posExtra = []) {
     const out = `${work}/${key}.json`;
     py(['plan', '--rpc', rpc, '--registry', REG, '--payrun', P, '--clerk', A.clerk.address, '--ids', IDS, '--batch', dir,
       '--extractor', extractor, ...(FORK && process.env.EVAL_NO_PO === '1' ? [] : ['--pos', sub + '/pos.csv']),   // PO book off: fork-only (planted controls)
+      ...(V3 ? ['--signed'] : []),
       ...(posExtra.length ? ['--pos-extra', posExtra.join(';')] : []), '--out', out]);
     plan = JSON.parse(readFileSync(out, 'utf8'));
     st.steps[key] = { plan }; save();
@@ -317,12 +374,13 @@ async function pipeline(mode, dir, extractor, tag, posExtra = []) {
   for (const [ri, lines] of plan.runs.entries()) {
     const L = lines.map((l) => ({ payeeAgentId: BigInt(l.payeeAgentId), payee: l.payee, amount: BigInt(l.amount), invoiceHash: l.invoiceHash, invoiceRef: l.invoiceRef }));
     const sk = `stage_${mode}_${tag}_${ri}`;
+    const sc = stageCall(L, lines);
     if (!st.steps[sk]) {
-      const sim = await simulate('clerk', P, 'stage', [L]);    // as stage_runs: simulate first, a refusal here is final (not sent)
+      const sim = await simulate('clerk', P, sc.functionName, sc.args);    // as stage_runs: simulate first, a refusal here is final (not sent)
       if (!sim.ok) { st.steps[sk] = { refusedInSimulation: sim.error, files: lines.map((l) => l.file), layer: 'A' }; save(); runs.push(st.steps[sk]); continue; }
     }
     if (st.steps[sk]?.refusedInSimulation) { runs.push(st.steps[sk]); continue; }
-    const rec = await send(sk, 'clerk', { address: P, abi: ABI, functionName: 'stage', args: [L], gas: await gasFor(sk, 'clerk', P, 'stage', [L], GAS_STAGE) },
+    const rec = await send(sk, 'clerk', { address: P, abi: ABI, ...sc, gas: await gasFor(sk, 'clerk', P, sc.functionName, sc.args, GAS_STAGE) },
       { label: `${mode}: clerk stages ${lines.map((l) => l.file.replace(/\.txt$/, '')).join(', ')}`, layer: 'A', file: lines.map((l) => l.file).join(',') });
     const staged = events(rec).find((e) => e.eventName === 'Staged');
     if (!staged) die(`${sk}: no Staged event`);
@@ -353,17 +411,22 @@ const B = [];
 for (const l of st.steps.hostile_lines.lines) {
   const k = `bypass_${l.file.replace(/[^a-z0-9]/gi, '_')}`;
   const L = [{ payeeAgentId: BigInt(l.payeeAgentId), payee: l.payee, amount: BigInt(l.amount), invoiceHash: l.invoiceHash, invoiceRef: l.invoiceRef }];
+  // PayRunV3: the attacker's best signature: the vendor's real one for a real vendor's invoice (it came with the invoice), else its own
+  const proof = V3 ? [{ dueDate: Number(l.dueDate), signature: SIG.hostile[l.file]?.signature || '0x' }] : null;
+  const call = V3 ? { functionName: 'stageSigned', args: [L, proof] } : { functionName: 'stage', args: [L] };
   if (!st.steps[k]) {
-    const sim = await simulate('clerk', payruns.hostile, 'stage', [L]);
-    if (sim.ok) { st.steps[k] = { notSent: 'the contract would accept this line: only the off-chain checks stop it', layer: 'B', file: l.file }; save(); }
-    else if (sim.error.name === 'UNDECODED') die(`${k}: undecoded simulation (${sim.error.args[0]}): not sending`);
-    else st.steps[k + '_sim'] = sim.error;
+    const sim = await simulate('clerk', payruns.hostile, call.functionName, call.args);
+    const simU = V3 ? await simulate('clerk', payruns.hostile, 'stage', [L]) : null;   // ...and without any signature
+    if (sim.ok || simU?.ok) { st.steps[k] = { notSent: 'the contract would accept this line: only the off-chain checks stop it', layer: 'B', file: l.file,
+      ...(V3 ? { acceptedBy: sim.ok ? 'stageSigned' : 'stage (unsigned)' } : {}) }; save(); }
+    else if (sim.error.name === 'UNDECODED' || simU?.error.name === 'UNDECODED') die(`${k}: undecoded simulation (${sim.error.args[0]}): not sending`);
+    else { st.steps[k + '_sim'] = sim.error; if (V3) st.steps[k + '_simUnsigned'] = simU.error; }
   }
   if (st.steps[k]?.notSent) { B.push({ ...l, ...st.steps[k] }); continue; }
   const err = st.steps[k + '_sim'];
-  const rec = await send(k, 'clerk', { address: payruns.hostile, abi: ABI, functionName: 'stage', args: [L], gas: GAS_STAGE },
+  const rec = await send(k, 'clerk', { address: payruns.hostile, abi: ABI, ...call, gas: GAS_STAGE },
     { expect: 'reverted', label: `bypass: ${l.file.replace(/\.txt$/, '')} sent straight to the contract -> ${err.name}`, layer: 'B', file: l.file });
-  B.push({ ...l, hash: rec.hash, status: rec.status, error: err });
+  B.push({ ...l, hash: rec.hash, status: rec.status, error: err, ...(V3 ? { signedWith: SIG.hostile[l.file]?.signer || null, errorUnsigned: st.steps[k + '_simUnsigned'] } : {}) });
 }
 
 // ------------------------------------------------------------------------------------------------ layer C: registry wallet swaps
@@ -381,10 +444,15 @@ async function repoint(step, newRole) {
   if (w.toLowerCase() !== nw.address.toLowerCase()) die(`${step}: registry wallet is ${w}`);
   return rec;
 }
-function swapInvoice(name, ref, amount, payTo) {
+async function swapInvoice(name, ref, amount, payTo, signer) {
   const d = `${work}/swap-${name}`;
   mkdirSync(d, { recursive: true });
   writeFileSync(`${d}/${name}.txt`, `INVOICE\nFrom: ${truth.vendors['1']}\nInvoice no: ${ref}\nDue date: 2026-12-20\nAmount due: ${amount} tUSD8\nPay to: ${payTo}\nPO number: PO-${ref.slice(-2)}\n`);
+  if (V3) {   // signed by whoever holds the wallet the invoice names (after a hijack: the attacker, which is a valid signature)
+    const aid = vendorIds[1], key = ref.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const v = { payeeAgentId: aid, payee: payTo, amount: cents(amount).toString(), invoiceHash: keccak256(Buffer.from(`clerk-invoice:${aid}:${key}`)), dueDate: 20261220 };
+    sidecar(`${d}/${name}.txt.sig.json`, await signInvoice(signer, payruns.hostile, v));
+  }
   return d;
 }
 async function swapStage(name, dir) {   // the real pipeline stages it (no execute yet)
@@ -392,14 +460,15 @@ async function swapStage(name, dir) {   // the real pipeline stages it (no execu
   if (!st.steps[key]) {
     const out = `${work}/${key}.json`;
     py(['plan', '--rpc', rpc, '--registry', REG, '--payrun', payruns.hostile, '--clerk', A.clerk.address, '--ids', IDS, '--batch', dir,
-      '--extractor', 'rules', '--pos', sub + '/pos.csv', '--pos-extra', SWAP_POS.join(';'), '--out', out]);
+      '--extractor', 'rules', '--pos', sub + '/pos.csv', '--pos-extra', SWAP_POS.join(';'), ...(V3 ? ['--signed'] : []), '--out', out]);
     st.steps[key] = { plan: JSON.parse(readFileSync(out, 'utf8')) }; save();
   }
   const plan = st.steps[key].plan;
   if (plan.runs.length !== 1 || plan.runs[0].length !== 1) die(`${name}: the pipeline did not stage exactly one line (${JSON.stringify(plan.items.map((i) => [i.decision, i.reasons, i.skip]))})`);
   const l = plan.runs[0][0];
   const L = [{ payeeAgentId: BigInt(l.payeeAgentId), payee: l.payee, amount: BigInt(l.amount), invoiceHash: l.invoiceHash, invoiceRef: l.invoiceRef }];
-  const rec = await send(`stage_${name}`, 'clerk', { address: payruns.hostile, abi: ABI, functionName: 'stage', args: [L], gas: await gasFor(`stage_${name}`, 'clerk', payruns.hostile, 'stage', [L], GAS_STAGE) },
+  const sc = stageCall(L, plan.runs[0]);
+  const rec = await send(`stage_${name}`, 'clerk', { address: payruns.hostile, abi: ABI, ...sc, gas: await gasFor(`stage_${name}`, 'clerk', payruns.hostile, sc.functionName, sc.args, GAS_STAGE) },
     { label: `swap ${name}: clerk stages ${l.payee === A.vendor1.address ? 'to Acme\'s original wallet' : 'to the wallet the registry now names'}`, layer: 'C' });
   return { rec, runId: events(rec).find((e) => e.eventName === 'Staged').args.runId, onHold: events(rec).some((e) => e.eventName === 'StagedOnHold') };
 }
@@ -414,15 +483,15 @@ async function swapExec(name, runId, expectReason) {
 }
 const C = [];
 {
-  const s1 = await swapStage('s1', swapInvoice('s1', 'INV-S1', '0.04', A.vendor1.address));
+  const s1 = await swapStage('s1', await swapInvoice('s1', 'INV-S1', '0.04', A.vendor1.address, 'vendor1'));
   const r1 = await repoint('swap_s1_repoint', 'atk4');
   const e1 = await swapExec('s1', s1.runId, 3);
   C.push({ scenario: 'wallet swapped after staging', stage: s1.rec.hash, swap: r1.hash, execute: e1.rec.hash, paid: e1.paid, blocked: e1.blocked, closed: e1.closed });
-  const s2 = await swapStage('s2', swapInvoice('s2', 'INV-S2', '0.05', A.atk4.address));
+  const s2 = await swapStage('s2', await swapInvoice('s2', 'INV-S2', '0.05', A.atk4.address, 'atk4'));
   const e2 = await swapExec('s2', s2.runId, 1);
   C.push({ scenario: 'new invoice while the registry points to the attacker', stage: s2.rec.hash, onHold: s2.onHold, execute: e2.rec.hash, paid: e2.paid, blocked: e2.blocked });
   const r3 = await repoint('swap_s3_repoint', 'vendor1');
-  const s3 = await swapStage('s3', swapInvoice('s3', 'INV-S3', '0.06', A.vendor1.address));
+  const s3 = await swapStage('s3', await swapInvoice('s3', 'INV-S3', '0.06', A.vendor1.address, 'vendor1'));
   const e3 = await swapExec('s3', s3.runId, 1);
   C.push({ scenario: 'swapped back to the old wallet (A -> B -> A)', swap: r3.hash, stage: s3.rec.hash, onHold: s3.onHold, execute: e3.rec.hash, paid: e3.paid, blocked: e3.blocked });
 }
@@ -532,8 +601,8 @@ async function sweep(tag) {
   st.sweepTotals = { tusd: tot.tusd.toString(), tqday: tot.tqday.toString() }; save();
   log(`${tag}: returned ${formatUnits(tot.tusd, 6)} tUSD8 + ${formatEther(tot.tqday)} tQDAY to the funder`);
 }
-function gasPlanFull(gp) {
-  return Object.fromEntries(Object.entries(GAS_UNITS_FULL).map(([r, u]) => {
+function gasPlanFull(gp, v3 = V3) {
+  return Object.fromEntries(Object.entries(v3 ? GAS_UNITS_FULL_V3 : GAS_UNITS_FULL).map(([r, u]) => {
     const wei = (u * gp * 13n) / 10n, step = 10n ** 15n;   // round up to 0.001 tQDAY
     return [r, (((wei + step - 1n) / step) * step).toString()];
   }));
@@ -561,9 +630,10 @@ async function budget() {
     const paid = (m) => files.filter((t) => t.cls === 'legit' || (m === 'rules' && t.cls === 'model_edit')).reduce((a, t) => a + u(t.true_amount), 0n);
     const pay = paid('hostile') + paid('rules');
     const float = set === 'full' ? (cents(process.env.EVAL_FLOAT_TUSD || FLOAT_FULL) < pay ? cents(process.env.EVAL_FLOAT_TUSD || FLOAT_FULL) : pay) : pay + 2n * MARGIN;
-    const plan = set === 'full' ? gasPlanFull(gp) : Object.fromEntries(Object.entries(GAS).map(([k, v]) => [k, parseEther(v).toString()]));
+    const v3 = opt('--payrun', 'v2') === 'v3';
+    const plan = set === 'full' ? gasPlanFull(gp, v3) : Object.fromEntries(Object.entries(GAS).map(([k, v]) => [k, parseEther(v).toString()]));
     const sent = Object.values(plan).reduce((a, v) => a + BigInt(v), 0n);
-    const units = set === 'full' ? Object.values(GAS_UNITS_FULL).reduce((a, v) => a + v, 0n) : 0n;
+    const units = set === 'full' ? Object.values(v3 ? GAS_UNITS_FULL_V3 : GAS_UNITS_FULL).reduce((a, v) => a + v, 0n) : 0n;
     const fb = await c.getBalance({ address: funder });
     const ft = await c.readContract({ address: TUSD, abi: ERC20_ABI, functionName: 'balanceOf', args: [funder] });
     const fits = fb >= sent + FUNDER_KEEP + parseEther('0.002') && ft >= float;
@@ -593,7 +663,7 @@ function writeReport() {
   L.push('');
   const full = st.subset.files === 160;
   L.push(`Run ${R.at}. ${full ? 'All 160 invoices of the seeded corpus (seed 8004), the same families and counts as the local eval (e2e/reports/adversarial-eval-2026-11-22.md)' : `${st.subset.files} invoices from the seeded 160-invoice corpus (seed 8004; every attack family, both duplicate kinds, every injection goal)`}, amounts scaled 1/${SCALE} to fit test-token budgets (per-run cap ${formatUnits(PER_RUN, 6)} tUSD8 = the local eval's 500 scaled the same way).`
-    + ` Real ERC-8004 registry ${addrLink(REG)}, real tUSD8 ${addrLink(TUSD)}, two fresh PayRunV2 (same bytecode as Clerk's): hostile-extractor ${addrLink(st.payruns.hostile)}, rules-extractor ${addrLink(st.payruns.rules)}.`
+    + ` Real ERC-8004 registry ${addrLink(REG)}, real tUSD8 ${addrLink(TUSD)}, ${st.contract === 'PayRunV3' ? `two fresh PayRunV3 (PayRunV2 plus vendor-signed invoices; the three vendors marked signedOnly${st.signedOff ? ': NO, planted control run' : ''})` : 'two fresh PayRunV2 (same bytecode as Clerk\'s)'}: hostile-extractor ${addrLink(st.payruns.hostile)}, rules-extractor ${addrLink(st.payruns.rules)}.`
     + ` The owner is a rubber stamp: it executes every run the clerk stages without reading it. Every number below is read back from the chain (Paid events and balances).`);
   L.push('');
   L.push('## Outcome (scored from the chain)');
@@ -649,8 +719,19 @@ function writeReport() {
   L.push('## B. Checks bypassed: the attacker\'s line sent straight to the contract');
   L.push('As if check.py were compromised too: the clerk\'s key stages the hostile extractor\'s line directly. A refusal is a real reverted transaction.');
   L.push('| Invoice | Family | Claimed payee | Contract | Tx |'); L.push('|---|---|---|---|---|');
-  for (const b of R.B) L.push(`| ${b.file.split('/')[1]} | ${fam[b.cls]} | ${b.claimed_vendor} -> \`${b.payee.slice(0, 10)}…\` | ${b.hash ? `refused: ${b.error.name}` : 'would accept (not sent): stopped off-chain only'} | ${b.hash ? link(b.hash) : '-'} |`);
+  if (st.contract === 'PayRunV3') L.push('PayRunV3: each line is tried with the best signature the attacker holds (the vendor\'s real signature that came with a real vendor\'s invoice; its own key for a fake one) and without any signature; it counts as refused only if the contract refuses both. The sent (reverted) tx is the signed attempt.');
+  for (const b of R.B) L.push(`| ${b.file.split('/')[1]} | ${fam[b.cls]} | ${b.claimed_vendor} -> \`${b.payee.slice(0, 10)}…\` | ${b.hash ? `refused: ${b.error.name}${b.errorUnsigned ? ` (unsigned: ${b.errorUnsigned.name})` : ''}` : `would accept (not sent): stopped off-chain only${b.acceptedBy ? ` (accepted by ${b.acceptedBy})` : ''}`} | ${b.hash ? link(b.hash) : '-'} |`);
   L.push('');
+  if (st.contract === 'PayRunV3') {
+    L.push('### B by family: refused by the contract vs stopped off-chain only');
+    L.push('| Family | attack lines | refused on chain | stopped off-chain only | refusal reasons |'); L.push('|---|---|---|---|---|');
+    const by = {};
+    for (const b of R.B) { const x = by[b.cls] = by[b.cls] || { n: 0, refused: 0, off: 0, why: {} }; x.n++; if (b.hash) { x.refused++; x.why[b.error.name] = (x.why[b.error.name] || 0) + 1; } else x.off++; }
+    for (const cls of Object.keys(fam)) if (by[cls]) L.push(`| ${fam[cls]} | ${by[cls].n} | ${by[cls].refused} | ${by[cls].off} | ${Object.entries(by[cls].why).map(([k, v]) => `${k} ${v}`).join(', ') || '-'} |`);
+    const tot = Object.values(by).reduce((a, x) => ({ n: a.n + x.n, r: a.r + x.refused, o: a.o + x.off }), { n: 0, r: 0, o: 0 });
+    L.push(`| **All** | ${tot.n} | **${tot.r}** | **${tot.o}** | |`);
+    L.push('');
+  }
   L.push('## C. Registry wallet swaps on the real ERC-8004 registry (rubber-stamp owner executes)');
   L.push('| Scenario | Txs | Result |'); L.push('|---|---|---|');
   const why = { 1: 'payee on hold', 2: 'staged during a hold: owner must confirm', 3: 'payee changed after staging: run closed' };
@@ -666,7 +747,7 @@ function writeReport() {
   L.push('');
   L.push(`Check it read-only (no keys): \`cd sandbox && npm run judge:testnet-eval\` re-reads every transaction above from the public RPC and re-derives the outcome table. Corpus: \`e2e/adversarial/gen.py --seed 8004 --scale 1000 --wallets <the vendor and attacker addresses in testnet-eval.json>\`, then \`e2e/adversarial/tn_plan.py ${full ? 'full' : 'subset'}\` (truth.json sha256 ${st.corpusSha || 'n/a'}).`);
   writeFileSync(`${work}/report.md`, L.join('\n') + '\n');
-  writeFileSync(`${work}/report.json`, JSON.stringify({ mode: st.mode, set: st.set || (st.subset.files === 16 ? 'subset' : 'full'), corpusSha: st.corpusSha || null,
+  writeFileSync(`${work}/report.json`, JSON.stringify({ mode: st.mode, ...(st.contract === 'PayRunV3' ? { contract: 'PayRunV3', signedOff: !!st.signedOff } : {}), set: st.set || (st.subset.files === 16 ? 'subset' : 'full'), corpusSha: st.corpusSha || null,
     scale: SCALE, perRun: PER_RUN.toString(), perDay: PER_DAY.toString(), float: st.float || null, payruns: st.payruns, vendorIds: st.vendorIds, addresses: st.addresses, subset: st.subset,
     result: st.result, txs: st.txs }, (k, v) => (typeof v === 'bigint' ? v.toString() : v), 1));
   log(`report: ${work}/report.md`);

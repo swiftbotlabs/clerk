@@ -8,6 +8,10 @@ No keys here, no sends: only read calls (cast call) against the RPC.
         --batch DIR --extractor rules|json [--pos pos.csv] --out plan.json
     python3 tn_plan.py hostile --corpus OUT --ids ... --out lines.json   # the attacker's best line per attack file, in
                                                                          # on-chain form (for the 'checks bypassed' layer)
+    python3 tn_plan.py sigdata --corpus OUT --ids ... --wallets W --out sig.json   # PayRunV3: what each invoice's issuer
+        # signs: a real vendor signs its TRUE invoice (amount, number, due date from its own records, i.e. the truth and the
+        # original document); a fake invoice's sender can only sign with its own (attacker) key, over the line it claims
+    plan ... --signed                                                    # PayRunV3: attach <invoice>.sig.json, hold mismatches
 """
 from __future__ import annotations
 
@@ -128,6 +132,8 @@ def plan(a) -> dict:
     if not files:
         raise SystemExit("no invoices in --batch (0 files is a failure)")
     items = stage.plan(chain, a.payrun, files, directory, a.extractor, policy)
+    if a.signed:
+        stage.signature_gate(chain, a.payrun, items, Path(a.batch), directory)
     per_run, today = [int(x.split()[0]) for x in chain.call(a.payrun, "headroom(address)(uint256,uint256)", a.clerk).splitlines()[:2]]
     runs = stage.pack(items, per_run, today)
     run_lines = []
@@ -135,9 +141,10 @@ def plan(a) -> dict:
         lines = []
         for it in run:
             lines.append({"file": it.file, "payeeAgentId": str(it.agent_id), "payee": directory.registry.entries[it.registered_name],
-                          "amount": str(it.units), "invoiceHash": it.invoice_hash, "invoiceRef": stage.ref32(it.proposed["reference"])})
+                          "amount": str(it.units), "invoiceHash": it.invoice_hash, "invoiceRef": stage.ref32(it.proposed["reference"]),
+                          **({"dueDate": it.due, "signature": it.signature or "0x"} if a.signed else {})})
         run_lines.append(lines)
-    return {"extractor": a.extractor, "batch": a.batch, "per_run": per_run, "today": today,
+    return {"extractor": a.extractor, "batch": a.batch, "signed": bool(a.signed), "per_run": per_run, "today": today,
             "directory": {n: {"id": directory.ids[n], "wallet": w} for n, w in directory.registry.entries.items()},
             "items": [{k: v for k, v in asdict(i).items() if k != "evidence"} for i in items], "runs": run_lines}
 
@@ -164,8 +171,50 @@ def hostile(a) -> dict:
         aid = ids[vid]
         out.append({"file": f, "cls": t["cls"], "claimed_vendor": hl["vendor"], "payeeAgentId": str(aid), "payee": payee,
                     "amount": str(stage.to_units(hl["amount"])), "invoiceHash": stage.invoice_key(aid, hl["reference"]),
-                    "invoiceRef": stage.ref32(hl["reference"])})
+                    "invoiceRef": stage.ref32(hl["reference"]), "dueDate": stage.due_yyyymmdd(hl.get("due_date"))})
     return {"lines": out}
+
+
+VENDOR_ISSUED = {"legit", "model_edit", "doc_amount_edit", "over_cap", "duplicate"}
+
+
+def sigdata(a) -> dict:
+    """What the issuer of each invoice signs (PayRunV3). The eval process holds the keys and signs; nothing is signed here.
+    Real vendor (legit, model_edit, doc_amount_edit, over_cap, duplicate): its own record of the invoice: the true amount,
+    its invoice number and the due date printed on the ORIGINAL document (for a duplicate: the original in batch 1; for a
+    document whose amount an attacker edited: the amount the vendor billed, i.e. the PO amount in the truth file).
+    Fake (redirect, injection, lookalike): the sender has no vendor key; it signs the line it wants paid with its own key
+    (the attacker wallet it prints, else the first attacker)."""
+    sys.path.insert(0, str(APP / "agent"))
+    import stage  # noqa: E402
+    ids = parse_ids(a.ids)
+    corpus = Path(a.corpus)
+    truth = json.loads((corpus / "truth.json").read_text())
+    w = json.loads(Path(a.wallets).read_text())
+    wallets, attackers = w["vendors"], [x.lower() for x in w["attackers"]]
+    names = {v: int(k) for k, v in truth["vendors"].items()}
+    out = []
+    for f, t in sorted(truth["files"].items()):
+        if t["cls"] in VENDOR_ISSUED:
+            orig = f if t["cls"] != "duplicate" else "batch1/" + t["duplicate_of"]
+            to = truth["files"][orig]   # subset() and full() always include a duplicate's original
+            vid = to["vendor_id"]
+            doc = stage.extract_rules((corpus / orig).read_text(encoding="utf-8"))
+            due = stage.due_yyyymmdd(doc.get("due_date"))
+            if not due:
+                raise SystemExit(f"{orig}: no due date in the original document")
+            out.append({"file": f, "cls": t["cls"], "signer": f"vendor{vid}", "payeeAgentId": str(ids[vid]), "payee": wallets[str(vid)],
+                        "amount": str(stage.to_units(to["true_amount"])), "invoiceHash": stage.invoice_key(ids[vid], to["ref_key"]),
+                        "dueDate": due})
+        else:
+            hl = t["hostile_line"]
+            vid = names.get(hl["vendor"]) or t.get("vendor_id") or t.get("impersonates")
+            payee = hl["wallet"] or wallets[str(vid)]
+            signer = f"atk{attackers.index(payee.lower()) + 1}" if payee.lower() in attackers else "atk1"
+            out.append({"file": f, "cls": t["cls"], "signer": signer, "payeeAgentId": str(ids[vid]), "payee": payee,
+                        "amount": str(stage.to_units(hl["amount"])), "invoiceHash": stage.invoice_key(ids[vid], hl["reference"]),
+                        "dueDate": stage.due_yyyymmdd(hl.get("due_date"))})
+    return {"records": out}
 
 
 def main(argv: list[str]) -> int:
@@ -173,7 +222,7 @@ def main(argv: list[str]) -> int:
         print(json.dumps((subset if argv[1] == "subset" else full)(Path(argv[2]), Path(argv[3]))))
         return 0
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["plan", "hostile"])
+    ap.add_argument("cmd", choices=["plan", "hostile", "sigdata"])
     ap.add_argument("--rpc")
     ap.add_argument("--registry")
     ap.add_argument("--payrun")
@@ -185,6 +234,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--pos-extra", help="extra PO rows 'vid,PO,amount;...' (corpus vendor numbers)")
     ap.add_argument("--corpus")
     ap.add_argument("--wallets")
+    ap.add_argument("--signed", action="store_true")
     ap.add_argument("--out", required=True)
     a = ap.parse_args(argv[1:])
     if a.cmd == "plan":
@@ -192,6 +242,8 @@ def main(argv: list[str]) -> int:
             if not getattr(a, k):
                 raise SystemExit(f"--{k} is required for plan")
         res = plan(a)
+    elif a.cmd == "sigdata":
+        res = sigdata(a)
     else:
         res = hostile(a)
     Path(a.out).write_text(json.dumps(res, indent=1, ensure_ascii=False))

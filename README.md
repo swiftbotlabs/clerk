@@ -44,6 +44,8 @@ flowchart LR
 | `contracts/src/PayRunV2.sol` | PayRun plus the **payee-change hold** (below). Same staging, caps and approval flow. In the repo, tested, and deployed on testnet next to the first PayRun (below) |
 | `contracts/test/` | 9 unit tests, 10 property tests (5 fuzzed at 256 runs: run cap, day cap, wrong payee for any address and agent id, owner-only actions for any caller, exact totals) + fork tests against the real Aevum ERC-8004 registry, EntryPoint v0.7 and Kernel v3.1 |
 | `contracts/test/PayRunV2*.t.sol` | 38 tests for PayRunV2: the 19 above re-run against it, plus 19 for the hold (4 fuzzed, including A to B to A) |
+| `contracts/src/PayRunV3.sol` | PayRunV2 plus **vendor-signed invoices** (below): for a vendor marked `signedOnly`, a line is staged only with the vendor's EIP-712 signature over exactly its values. Every PayRunV2 test passes on it unchanged (`test/v3compat`) |
+| `contracts/script/sig_controls.sh` | Revert control for the signature check: 9 broken versions, each must turn the tests red |
 | `contracts/script/hold_controls.sh` | Revert control: switches each hold rule off in turn, expects tests to fail, restores the source byte for byte, expects all green |
 | `contracts/script/match_onchain.py` | Shows the deployed PayRun is this source: compiles it, reads the runtime bytecode from the chain, compares byte for byte (metadata hash included) |
 | `agent/check.py` | Fail-closed checks between an invoice and the line a model proposed, plus the payer's purchase-order match and per-vendor amount bands (18 tests) |
@@ -194,15 +196,53 @@ first time and started a 24-hour hold; the owner (the Kernel smart account) then
 logged. `agent/reconcile.py --payrun 0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541 --from-block 3682602` prints the four ALERT lines. A payment
 blocked by the hold is on testnet too: `e2e/block_v2_testnet.sh` (Globex, new to V2: staged on hold, the owner's pay attempt -> PaymentBlocked, nothing paid).
 
+## Vendor-signed invoices (PayRunV3)
+PayRunV2 refuses a wrong payee, a run over the cap and a re-sent invoice on chain, but three attacks look like valid lines to it, so only
+the off-chain checks stopped them: an impersonator mapped onto a real vendor's registered wallet, a genuine invoice whose amount, number,
+due date or vendor the model altered, and an amount edited inside the document. PayRunV3 closes that gap on chain:
+- The vendor signs each invoice it issues with the wallet it registered for its ERC-8004 identity: EIP-712, domain "Clerk PayRun" / "3" /
+  chain / the payer's PayRunV3, type `Invoice(uint256 payeeAgentId,address payee,uint128 amount,bytes32 invoiceHash,uint32 dueDate)`.
+  A smart-account vendor wallet signs through ERC-1271. The signature travels with the invoice (`<invoice>.sig.json` next to it).
+- The owner marks a vendor `signedOnly` (`setSignedOnly`, owner only, logged). From then on `stage` refuses that vendor's lines
+  (`VendorSignatureRequired`) and `stageSigned` needs a signature by the vendor's current registered wallet over exactly the staged
+  values (`BadVendorSignature`). A signature for another payer, chain, amount, invoice, due date or vendor fails; so do high-s and
+  malformed signatures. Pay-once still applies to signed invoices.
+- The payee-change hold still applies: a hijacked registry entry can sign with the attacker's new wallet, and that wallet still waits.
+- `stage.py --signed` reads the signatures, asks the contract (`checkInvoice`, read-only) and holds a line whose signature is missing or
+  does not match, so one bad line never sinks a whole run.
+
+How we test it: 13 tests in `PayRunV3.t.sol`, each of the three attacks also run with the check switched off (it is staged and paid), a
+fuzzed "change any signed value" test, and the whole PayRunV2 suite re-targeted at PayRunV3 (`test/v3compat/gen.sh`, 38 tests).
+`contracts/script/sig_controls.sh` breaks the check 9 ways (signedOnly ignored, any signature accepted, amount / due date / invoice /
+vendor not signed, signature not bound to the contract and chain, high-s accepted, any ERC-1271 reply accepted): each turns tests red.
+
+The 160-invoice eval with every off-chain check bypassed (layer B), PayRunV2 vs PayRunV3 (`e2e/adversarial/b_compare.py`):
+
+| Family | attack lines | refused on chain, PayRunV2 (testnet, 26 Nov) | refused on chain, PayRunV3 |
+|---|---|---|---|
+| Redirect | 25 | 25 | 25 |
+| Prompt injection | 25 | 25 | 25 |
+| Look-alike vendor | 25 | 16 | 25 |
+| Model edits a value | 25 | 9 | 25 |
+| Amount edited in the document | 10 | 0 | 10 |
+| Over the per-run cap | 5 | 5 | 5 |
+| Re-sent duplicate | 15 | 15 | 15 |
+| **All** | 130 | **95** | **130** |
+
+The PayRunV3 column is {V3_TESTNET_SOURCE}. The pipeline result is unchanged: 0 wrong payments, genuine 55/55 (rules) and 30/55
+(hostile). Each refused line is tried both with the best signature the attacker holds (the vendor's real one that came with a real
+vendor's invoice, its own key for a fake one) and without a signature; it counts as refused only if the contract refuses both.
+
 ## Run it
 Requirements: Foundry (`forge`, `cast`, `anvil`), Python 3.11+, a Solidity 0.8.24+ compiler (set `solc` in `contracts/foundry.toml`).
 
 ```bash
-cd contracts && forge test --no-match-path 'test/fork/*'    # 57 unit + property tests (PayRun 19, PayRunV2 38)
+cd contracts && forge test --no-match-path 'test/fork/*'    # unit + property tests (PayRun 19, PayRunV2 38, PayRunV3 13, PayRunV2 suite on V3 38, ...)
 script/hold_controls.sh                                      # revert control for the payee-change hold
+script/sig_controls.sh                                       # revert control for vendor-signed invoices (PayRunV3)
 python3 script/match_onchain.py                              # deployed bytecode == this source
 forge test --match-path 'test/fork/*' --fork-url https://rpc-test.qday.info   # against the real registry
-cd ../agent/tests && python3 test_check.py && python3 test_stage.py && python3 test_reconcile.py   # check.py, stage.py, reconcile.py
+cd ../agent/tests && python3 test_check.py && python3 test_stage.py && python3 test_reconcile.py && python3 test_signed.py   # check.py, stage.py, reconcile.py
 ../../e2e/adversarial/run.sh                                 # the adversarial-invoice eval (local anvil chain; = make local-eval)
 make judge-rerun                                              # (repo root) re-check the published testnet eval read-only: every tx, the outcome table
 cd ../../e2e && ./run_fork.sh                                 # full flow on a local fork (chain 440050)
@@ -222,7 +262,7 @@ Environment: `AEVUM_RPC` (default `https://rpc-test.qday.info`), `AEVUM_REGISTRY
 |---|---|
 | Chain | 44005, RPC https://rpc-test.qday.info, explorer https://explorer-test.qday.info |
 | tUSD8 | `0x456569838f1d43009A91ebA4263147Afd7233483` (6 decimals) |
-| ERC-8004 identity registry | `0xF45E7f39Caba1d2055f613970575a7e7069636Be` |
+| ERC-8004 identity registry | `0xF45E7f39Caba1d2055f613970575a7e7069636Be` (QDay's, not ours: see below) |
 | PayRun | [`0x2EE29a167CDDb964aAB9C899ea9Ae89847e3Da98`](https://explorer-test.qday.info/address/0x2EE29a167CDDb964aAB9C899ea9Ae89847e3Da98) (deploy [0x7f446fc8…](https://explorer-test.qday.info/tx/0x7f446fc86fffa0c8b733de3d8e333850ce8cb53059912bc74ed71cb9b04ac47f), block 3637396) |
 | Owner + treasury | Kernel v3.1 smart account [`0xc0bC2ab048dCa250417bEaFf6B68A222a4ae2d1C`](https://explorer-test.qday.info/address/0xc0bC2ab048dCa250417bEaFf6B68A222a4ae2d1C) |
 | Vendor identities (ERC-8004) | Acme Supplies #1698 ([0x79f51231…](https://explorer-test.qday.info/tx/0x79f5123103cb22251702eb7f27a1b5ec11e30625af100763935a9b8fd6215edb)), Globex Logistics #1699 ([0xc6375c16…](https://explorer-test.qday.info/tx/0xc6375c163fecb3a023697e778d45e4c3dc73208b7f6e8bb2bf6ef81609bde302)) |
@@ -236,6 +276,16 @@ Environment: `AEVUM_RPC` (default `https://rpc-test.qday.info`), `AEVUM_REGISTRY
 | Owner confirms the payee early (UserOperation) | [0x1353239c…](https://explorer-test.qday.info/tx/0x1353239ca2467412fc843090be685e608af91b1967975fcb1ebf7381b3813316): PayeeConfirmed + HoldReleased (early) |
 | Payment blocked by the hold (Globex, new to V2) | session grant [0xe19ec4c1…](https://explorer-test.qday.info/tx/0xe19ec4c148207ab5aa906e29f932e067121bcc731c8eca1b53f660dcbe532a35) · staged on hold [0xe6e5f256…](https://explorer-test.qday.info/tx/0xe6e5f2560477868cd22893ae8cbb78e6b8580f8e4b6ebf43658767fa0d4a13e9) · owner's pay attempt [0xdfc4b2ad…](https://explorer-test.qday.info/tx/0xdfc4b2add2348a0c2253b6b37568b8539bb706a024e45f3fdaa0c5549ad83a1a) -> PaymentBlocked (reason 1, hold), nothing paid. Both owner UserOperations went through QDay's bundler (`e2e/block_v2_testnet.sh`) |
 | Clerk's key as a Kernel permission (in the account) | policy [`0x4Ea16B1b…`](https://explorer-test.qday.info/address/0x4Ea16B1bb18005344FC77491F3809a47C74c01a4) (deploy [0x5f859864…](https://explorer-test.qday.info/tx/0x5f85986413ccc502693ab3359887f362b716bd91d31d8e24fbb8295882198cc8); bytecode MATCH incl. metadata, `CONTRACT=ClerkStagePolicy script/match_onchain.py`) · account made its own PayRunV2 session [0x7dfd70df…](https://explorer-test.qday.info/tx/0x7dfd70df583ba970741c3e7a4b8a0316d2bcc8aba4d43e94aa5f0ae483cc7b08) · the clerk's first UserOperation enables the permission and stages run 2 (0.10 tUSD8, stagedBy = the account) [0xfc7f9f35…](https://explorer-test.qday.info/tx/0xfc7f9f35fac800fb49889bb2ac855bc67dc3d25ea34c2bbe472dac824075a368) · refused at validation against live state: pay, transfer, over-cap, gas drain (`e2e/reports/clerk-permission-2026-11-21.txt`) · owner revokes [0x6a5b447a…](https://explorer-test.qday.info/tx/0x6a5b447aebeeee5743177da0d5f106f35ad8368307d81decead4183684d68cdb), then even an in-cap stage is refused |
+
+**Whose ERC-8004 registry is `0xF45E…36Be`?** QDay's, not ours: it is an EIP-1967 proxy named AgentIdentity, deployed on
+2026-09-16 (two months before the challenge opened) by [`0x94ef…9C05`](https://explorer-test.qday.info/address/0x94ef5dB164e7BBf4149e298c5588C035Ea8E9C05)
+([creation tx](https://explorer-test.qday.info/tx/0xd0d664d6e13564d75569969baad972f0f39ea7f099d08fdde2cdd78afb1126db)), the same address
+that deployed tUSD8. The Aevum Starter Kit docs ([aevum-starter-kit.vercel.app/docs](https://aevum-starter-kit.vercel.app/docs), Confirmation
+of Payee track) listed it on 17 Nov as "an ERC-8004-style identity registry ... (found on chain, not in QDay's docs yet)" and, read again on
+27 Nov, say "QDay's ERC-8004 registry is still in internal testing and isn't open for this challenge, so keep the name-to-address mapping in
+your own contract." Its `register()` is permissionless on chain, which is how our test vendors #1698/#1699 registered. Clerk depends only on
+`getAgentWallet(agentId)` (the `IAgentIdentity` interface): every PayRun takes the registry address at deploy, and the local eval runs the
+same contracts against our own registry (`contracts/test/eval/EvalRegistry.sol`).
 
 Live refusals on testnet (eth_call against the deployed PayRun, 20 Nov): the clerk's key calling `execute(3)` -> `NotOwner`; the clerk staging 5.00 -> `RunCapExceeded(5000000, 2500000)`; the clerk staging Acme's agentId with the attacker's wallet -> `PayeeNotRegistered`; a stranger staging -> `NoSession`; the owner's bare key (not the smart account) -> `NotOwner`; the smart account paying run 3 again -> `NotStaged(3)`.
 

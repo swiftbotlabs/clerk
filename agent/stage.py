@@ -11,6 +11,11 @@ Pipeline per invoice (each step fails closed):
   3. dedupe   : invoiceHash = keccak256("clerk-invoice:<vendor agentId>:<invoice number, letters and digits only>"), the pay-once
                 key PayRunV2 enforces. A re-sent copy (same file, a reminder, the number re-typed as "inv 1001") gets the same key, so
                 it is skipped if the chain says it is already paid or in an open run, and a second copy in the same batch is skipped.
+  3b. signed  : (--signed, PayRunV3) the vendor's signature for the invoice is read from `<invoice>.sig.json` next to it
+                ({"signature": "0x..."}: EIP-712 by the vendor's ERC-8004 wallet over agentId, payee, amount, invoiceHash and the
+                due date). PayRunV3.checkInvoice (read-only) says whether the vendor signs its invoices and whether this
+                signature matches the line as extracted; a mismatch or a missing required signature turns the line into HOLD.
+                The contract refuses the same lines at staging, so this step only keeps one bad line from sinking a whole run.
   4. pack     : PAYABLE lines are packed into runs that fit the session key's headroom (per-run cap, what is left today).
   5. simulate : each run is simulated (eth_call from the session key) before it is sent; a revert is reported, not retried.
   6. send     : sent with retries; after a timeout we re-read stagedInRun for the run's first invoice before resending, so a
@@ -39,6 +44,9 @@ RPC = os.environ.get("AEVUM_RPC", "https://rpc-test.qday.info")
 REGISTRY = os.environ.get("AEVUM_REGISTRY", "0xF45E7f39Caba1d2055f613970575a7e7069636Be")
 DECIMALS = 6  # tUSD8
 LINE_TUPLE = "(uint256,address,uint128,bytes32,bytes32)[]"
+PROOF_TUPLE = "(uint32,bytes)[]"
+SIG_SUFFIX = ".sig.json"
+MAX_SIG_BYTES = 2048
 STAGED_TOPIC = "0x8400e17d532706ea458bde53c28cd26ebffe99def46f75abf218ce1c94d8b099"
 
 
@@ -211,6 +219,8 @@ class Planned:
     skip: str | None = None  # already paid / already staged
     evidence: dict = field(default_factory=dict)
     run_id: int | None = None
+    due: int = 0             # due date as extracted, YYYYMMDD (0 = none); signed by the vendor on PayRunV3
+    signature: str = ""      # the vendor's signature from <invoice>.sig.json ("" = none)
 
 
 def evidence(text: str, line: dict) -> dict:
@@ -305,6 +315,47 @@ def plan(chain: Chain, payrun: str | None, invoices: list[Path], directory: Dire
     return out
 
 
+def due_yyyymmdd(value: str | None) -> int:
+    m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", (value or "").strip())
+    return int(m.group(1) + m.group(2) + m.group(3)) if m else 0
+
+
+def read_signature(invoice: Path) -> str:
+    """The vendor's signature delivered with the invoice (<invoice>.sig.json). Fails closed: anything malformed is 'none'."""
+    p = invoice.with_name(invoice.name + SIG_SUFFIX)
+    try:
+        if p.is_symlink() or not p.is_file() or p.stat().st_size > 4 * MAX_SIG_BYTES:
+            return ""
+        sig = json.loads(p.read_text()).get("signature", "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return sig if isinstance(sig, str) and re.fullmatch(r"0x(?:[0-9a-fA-F]{2}){1,%d}" % MAX_SIG_BYTES, sig) else ""
+
+
+def signature_gate(chain: Chain, payrun: str, items: list[Planned], invoices_dir: Path, directory: Directory) -> None:
+    """PayRunV3: hold a PAYABLE line whose vendor signature is missing (when the vendor signs) or does not match it."""
+    for it in items:
+        if it.decision != "PAYABLE" or it.skip:
+            continue
+        it.due = due_yyyymmdd(it.proposed.get("due_date"))
+        it.signature = read_signature(invoices_dir / it.file)
+        line = f"({it.agent_id},{directory.registry.entries[it.registered_name]},{it.units},{it.invoice_hash},{ref32(it.proposed['reference'])})"
+        out = chain.call(payrun, "checkInvoice((uint256,address,uint128,bytes32,bytes32),(uint32,bytes))(bool,bool)",
+                         line, f"({it.due},{it.signature or '0x'})").split()
+        required, valid = out[0] == "true", out[1] == "true"
+        if it.signature and not valid:
+            it.decision = "HOLD"
+            it.reasons.append("vendor signature: does not match this line (amount, invoice number, due date or vendor differ "
+                              "from what the vendor's registered wallet signed)")
+        elif required and not it.signature:
+            it.decision = "HOLD"
+            it.reasons.append("vendor signature: this vendor signs its invoices and none came with this one")
+
+
+def proofs_arg(run: list[Planned]) -> str:
+    return "[" + ",".join(f"({it.due},{it.signature or '0x'})" for it in run) + "]"
+
+
 def pack(items: list[Planned], per_run: int, today: int) -> list[list[Planned]]:
     """Greedy: biggest first, each run <= per_run, all runs together <= today's headroom, <= 25 lines a run.
     A line bigger than the per-run cap is never staged (it needs the owner)."""
@@ -334,18 +385,19 @@ def lines_arg(run: list[Planned], directory: Directory) -> str:
     return "[" + ",".join(parts) + "]"
 
 
-def stage_runs(chain: Chain, payrun: str, account: str, session_addr: str, runs: list[list[Planned]], directory: Directory) -> list[dict]:
+def stage_runs(chain: Chain, payrun: str, account: str, session_addr: str, runs: list[list[Planned]], directory: Directory,
+               signed: bool = False) -> list[dict]:
     results = []
     for run in runs:
-        arg = lines_arg(run, directory)
-        sig = f"stage({LINE_TUPLE})(uint256)"
+        arg = [lines_arg(run, directory)] + ([proofs_arg(run)] if signed else [])
+        fn = f"stageSigned({LINE_TUPLE},{PROOF_TUPLE})" if signed else f"stage({LINE_TUPLE})"
         try:
-            chain.call_from(session_addr, payrun, sig, arg)  # simulate first: a revert here is final
+            chain.call_from(session_addr, payrun, fn + "(uint256)", *arg)  # simulate first: a revert here is final
         except ChainError as e:
             results.append({"files": [i.file for i in run], "status": "refused in simulation", "error": str(e)[:300]})
             continue
         try:
-            receipt = chain.send(account, payrun, f"stage({LINE_TUPLE})", arg)
+            receipt = chain.send(account, payrun, fn, *arg)
             run_id = next((int(l["topics"][1], 16) for l in receipt.get("logs", []) if l["topics"][0].lower() == STAGED_TOPIC), None)
             for i in run:
                 i.run_id = run_id
@@ -368,12 +420,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--extractor", choices=["rules", "llm", "json"], default="rules")
     ap.add_argument("--pos", help="purchase orders, CSV agent_id,po,amount: a vendor's invoice must cite one and match its amount")
     ap.add_argument("--bands", help="CSV agent_id,max_amount: hold a vendor's invoice above its usual range")
+    ap.add_argument("--signed", action="store_true", help="PayRunV3: attach each invoice's vendor signature (<invoice>.sig.json) and "
+                    "hold lines whose signature is missing or does not match (stageSigned)")
     ap.add_argument("--out", default="run_report.json")
     a = ap.parse_args(argv)
     chain = Chain()
     directory = load_directory(chain, [int(x) for x in a.vendors.split(",") if x.strip()])
     files = [p for p in Path(a.invoices).iterdir() if p.is_file() and p.suffix.lower() in (".txt", ".eml", ".csv", ".md", ".pdf")]
     items = plan(chain, a.payrun, files, directory, a.extractor, load_policy(directory, a.pos, a.bands))
+    if a.signed:
+        if not a.payrun:
+            ap.error("--signed needs --payrun (a PayRunV3)")
+        signature_gate(chain, a.payrun, items, Path(a.invoices), directory)
     report: dict = {"payrun": a.payrun, "items": [asdict(i) for i in items]}
     if a.cmd == "stage":
         if not (a.payrun and a.account):
@@ -384,7 +442,7 @@ def main(argv: list[str] | None = None) -> int:
         per_run, today = [int(x.split()[0]) for x in chain.call(a.payrun, "headroom(address)(uint256,uint256)", session).splitlines()[:2]]
         runs = pack(items, per_run, today)
         report["headroom"] = {"perRun": per_run, "today": today}
-        report["runs"] = stage_runs(chain, a.payrun, a.account, session, runs, directory)
+        report["runs"] = stage_runs(chain, a.payrun, a.account, session, runs, directory, a.signed)
         report["items"] = [asdict(i) for i in items]
     Path(a.out).write_text(json.dumps(report, indent=1))
     for i in items:

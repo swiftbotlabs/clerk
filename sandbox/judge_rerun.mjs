@@ -21,7 +21,7 @@ import { readFileSync, existsSync, statSync, mkdtempSync, rmSync, writeFileSync 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { createPublicClient, http, parseEventLogs, hexToString, decodeErrorResult, BaseError } from 'viem';
+import { createPublicClient, http, parseAbi, parseEventLogs, hexToString, decodeErrorResult, BaseError } from 'viem';
 import { PAYRUN_ABI, ERC20_ABI } from './lib/sandbox.mjs';
 
 const TESTNET_RPC = 'https://rpc-test.qday.info';
@@ -57,7 +57,9 @@ const chainId = await pub.getChainId();
 if (chainId !== 44005) { console.error(`chain id ${chainId}, expected 44005 (Aevum testnet)`); process.exit(2); }
 const lc = (a) => a.toLowerCase();
 const roleOf = Object.fromEntries(Object.entries(R.addresses).map(([r, a]) => [lc(a), r]));
-const errAbi = PAYRUN_ABI.filter((x) => x.type === 'error');
+const CN = R.contract === 'PayRunV3' ? 'PayRunV3' : 'PayRunV2';   // a PayRunV3 run (vendor-signed invoices) has its own errors
+const errAbi = [...PAYRUN_ABI.filter((x) => x.type === 'error'), ...(CN === 'PayRunV3' ? parseAbi(['error VendorSignatureRequired(uint256 line, uint256 agentId)',
+  'error BadVendorSignature(uint256 line, uint256 agentId, address payee)']) : [])];
 
 // ------------------------------------------------------------------ 1. every tx
 console.log(`1. ${R.txs.length} transactions of ${reportPath.split('/').slice(-1)[0]} (${set} set, ${R.mode})`);
@@ -83,8 +85,8 @@ for (const [i, t] of R.txs.entries()) {
 console.log(`   ${txOk}/${R.txs.length} match (status, sender, block, gas)`);
 
 // ------------------------------------------------------------------ 2. contracts
-console.log('2. the two PayRunV2 contracts');
-const artPath = APP + 'contracts/out/PayRunV2.sol/PayRunV2.json';
+console.log(`2. the two ${CN} contracts`);
+const artPath = APP + `contracts/out/${CN}.sol/${CN}.json`;
 const art = existsSync(artPath) ? JSON.parse(readFileSync(artPath, 'utf8')) : null;
 const mask = (hex, refs) => {
   const b = Buffer.from(hex.slice(2), 'hex');
@@ -94,12 +96,12 @@ const mask = (hex, refs) => {
 for (const mode of ['hostile', 'rules']) {
   const P = R.payruns[mode];
   const owner = await pub.readContract({ address: P, abi: PAYRUN_ABI, functionName: 'owner' });
-  if (lc(owner) !== lc(R.addresses.owner)) bad(`${mode} PayRunV2 owner ${owner} is not the eval owner`);
+  if (lc(owner) !== lc(R.addresses.owner)) bad(`${mode} ${CN} owner ${owner} is not the eval owner`);
   if (art) {
     const code = await pub.getCode({ address: P });
     const same = code && mask(code, art.deployedBytecode.immutableReferences) === mask(art.deployedBytecode.object, art.deployedBytecode.immutableReferences);
-    if (!same) bad(`${mode} PayRunV2 ${P}: code on chain differs from contracts/out/PayRunV2 (rebuilt with a different compiler/settings?)`);
-    else console.log(`   ${mode} ${P}: same code as the repo's PayRunV2 (immutables masked), owner = eval owner`);
+    if (!same) bad(`${mode} ${CN} ${P}: code on chain differs from contracts/out/${CN} (rebuilt with a different compiler/settings?)`);
+    else console.log(`   ${mode} ${P}: same code as the repo's ${CN} (immutables masked), owner = eval owner`);
   } else console.log(`   ${mode} ${P}: owner = eval owner; code comparison skipped (run \`cd contracts && forge build\` first)`);
 }
 
