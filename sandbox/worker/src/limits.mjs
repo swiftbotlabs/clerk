@@ -55,6 +55,11 @@ export function parseConfig(env) {
   if (cfg.explorer && !/^https:\/\/[a-z0-9.-]+$/.test(cfg.explorer)) throw new Error('config: explorer');
   // v3: the registry is ours (any address, read from the config) and must differ from QDay's; the old PayRunV2 log is kept readable
   if (version === 'v3' && cfg.registry.toLowerCase() === '0xf45e7f39caba1d2055f613970575a7e7069636be') throw new Error('config: v3 registry');
+  if (cfg.seed?.genuine !== undefined) {   // r9: the seeded genuine payment (public tx hashes + run/attempt ids only)
+    const g = cfg.seed.genuine;
+    if (version !== 'v3' || typeof g !== 'object' || g === null || !Number.isSafeInteger(g.attempt) || g.attempt < 1 || !/^\d{1,9}$/.test(String(g.run))
+      || !H32.test(g.stageTx || '') || !H32.test(g.paidTx || '') || !/^\d{1,7}$/.test(String(g.amount)) || !/^\d{4}-\d\d-\d\dT[\d:.]+Z$/.test(g.paidAt || '')) throw new Error('config: seed.genuine');
+  }
   if (cfg.history !== undefined) {
     if (version !== 'v3' || typeof cfg.history !== 'object' || cfg.history === null || Object.keys(cfg.history).join() !== 'v2' || !ADDR.test(cfg.history.v2?.payrun || '')) throw new Error('config: history');
   }

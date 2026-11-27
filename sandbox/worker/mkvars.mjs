@@ -51,7 +51,10 @@ const config = {
   paidInvoiceHash: st.paid_invoice_hash,
   addresses: Object.fromEntries(ROLES.map((r) => [r, st.addresses[r]])),
   maxGasPriceWei: '5000000000', minBalanceWei: '5000000000000000',          // 5 gwei cap; 0.005 tQDAY floor per key (~40 failed stages)
-  seed: { deployTx: st.payrun_deploy_tx, paidTx: st.seed_execute, ...(version === 'v3' ? { registryDeployTx: st.registry_deploy_tx } : {}) },
+  seed: { deployTx: st.payrun_deploy_tx, paidTx: st.seed_execute, ...(version === 'v3' ? { registryDeployTx: st.registry_deploy_tx } : {}),
+    // r9: the one genuine invoice the owner paid after the public seeding (seed_sandbox.mjs pay); only once its read-backs passed
+    ...(version === 'v3' && st.genuine_paid?.confirmed === true ? { genuine: { attempt: Number(st.genuine_paid.attempt), run: st.genuine_paid.run,
+      stageTx: st.genuine_paid.stage_tx, paidTx: st.genuine_paid.paid_tx, amount: st.genuine_paid.amount, paidAt: st.genuine_paid.paid_at } } : {}) },
   // v3: the PayRunV2 sandbox's public log stays readable at /history/v2 (its Durable Object instance is kept as it was)
   ...(version === 'v3' ? { history: { v2: { payrun: '0x8034c01ba98d882abd30118235d648183d3fae52' } } } : {}),
 };

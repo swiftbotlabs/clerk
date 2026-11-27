@@ -35,6 +35,15 @@ after the vendor signed (both `BadVendorSignature`). Wallet changes are made by 
 and PayRunV3's hold still blocks them. In this mode the attempts go to their own log; the PayRunV2 sandbox's log stays readable at
 `/history/v2`. Tested on a fork of Aevum testnet: `test/attacks.fork.test.mjs` (state `version: v3`) and `test/worker.v3.http.test.mjs`.
 
+## Seeding the PayRunV3 sandbox, and its one payment (r9)
+`seed_sandbox.mjs` fills the V3 sandbox's public log so a visitor sees every attack at once: `attacks` sends kinds 1-17 and the
+genuine control through the live Worker's own `POST /attack` (the demo budget replaces only the human check), and stops at the first
+answer that is not the expected refusal. `pay` then pays that one genuine run with the sandbox owner key, outside the Worker, only
+after it has checked the run on chain (staged by the clerk key, one line, Acme at its registered wallet, 0.02 tUSD8, Acme's signature,
+`canExecute` ok); it records the payment in the state file and refuses to pay a second time. `worker/mkvars.mjs` puts it in the Worker
+config, so the page shows "The one payment" with its transactions, and `watch_paid.mjs` accepts exactly that transaction and still
+alerts on any other `Paid`. `check` re-reads it all (17/17 refused, the payment on chain and on the page). The public form never pays.
+
 ## Layout
 | Path | What it does |
 |---|---|
@@ -42,5 +51,6 @@ and PayRunV3's hold still blocks them. In this mode the attempts go to their own
 | `worker/` | Cloudflare Worker + one Durable Object (serialised sends, SQLite log and counts, rate limits), server-rendered page |
 | `deploy.mjs` | Idempotent deploy of the sandbox contracts and vendors (testnet or a local fork; `--v3` for PayRunV3 + VendorRegistry) |
 | `sign_invoice.mjs` | The vendor's side of a PayRunV3 invoice: signs a document's line (EIP-712) and checks it with the contract's `checkInvoice` |
-| `watch_paid.mjs` | Read-only watcher: one log line per check, alerts on any `Paid` other than the seed run |
+| `watch_paid.mjs` | Read-only watcher: one log line per check, alerts on any `Paid` other than the seed run (and the one seeded genuine payment) |
+| `seed_sandbox.mjs` | Fills the V3 sandbox's log (every attack + the genuine control through the Worker), pays the one genuine run, checks it all |
 | `test/` | Unit, fork and HTTP tests (HTTP tests run the Worker locally against an anvil fork) |

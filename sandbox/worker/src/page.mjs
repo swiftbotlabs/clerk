@@ -62,6 +62,14 @@ function addrLink(cfg, a, label) {
   return `<a href="${esc(cfg.explorer)}/address/${esc(a)}" rel="noopener">${esc(label || short(a))}</a>`;
 }
 
+/** r9: the one genuine invoice the owner paid after the seeding (v3 config only; the history view is v2 so it never matches). */
+const genuineOf = (cfg) => (cfg?.version === 'v3' && cfg.seed?.genuine?.paidTx ? cfg.seed.genuine : null);
+const isPaidGenuine = (cfg, a) => { const g = genuineOf(cfg); return !!g && a?.kind === 'genuine' && Number(a.id) === Number(g.attempt); };
+function paidNote(cfg) {
+  const g = genuineOf(cfg);
+  return g ? ` · <span class="verdict v-ok">Paid by the owner</span>run ${esc(g.run)}, ${esc(units(g.amount))} tUSD8 · ${txLink(cfg, g.paidTx)}` : '';
+}
+
 const PILL = { running: ['v-n', 'Running'], not_counted: ['v-n', 'Not counted'], refused: ['v-ok', 'Refused on chain'], accepted: ['v-hold', 'Accepted (control)'], fault: ['v-stop', 'Sandbox fault'], resting: ['v-hold', 'Sandbox resting'] };
 function pill(rec) {
   let [cls, txt] = PILL[rec.outcome] || ['v-hold', rec.outcome];
@@ -142,7 +150,7 @@ function logRows(cfg, attempts) {
     const err = lastError(a);
     return `<div class="item log"><div class="row"><span class="what"><a href="/attempt/${a.id}">#${a.id}</a> ${esc(a.title)}</span>
 <span class="when">${esc((a.at || '').replace('T', ' ').slice(0, 19))} UTC</span>
-<span class="err">${pill(a)}${esc(err)}${sent.length ? ' · ' + sent.map((s) => txLink(cfg, s.hash)).join(' · ') : ''}</span></div></div>`;
+<span class="err">${pill(a)}${esc(err)}${sent.length ? ' · ' + sent.map((s) => txLink(cfg, s.hash)).join(' · ') : ''}${isPaidGenuine(cfg, a) ? paidNote(cfg) : ''}</span></div></div>`;
   }).join('\n');
 }
 
@@ -158,7 +166,7 @@ export function renderHome({ state, cfg, sitekey, limits }) {
   }).join('\n');
   const countRows = ORDER.map((k) => {
     const r = c[k] || { attempts: 0, refused: 0, accepted: 0, faults: 0 };
-    return `<tr><td>${KINDS[k].n || 'Control'}. ${esc(KINDS[k].title.replace(/^Control: a/, 'A'))}</td><td class="num">${r.attempts}</td><td class="num">${k === 'genuine' ? r.accepted + ' accepted' : r.refused}</td><td class="num hide">${r.faults}</td></tr>`;
+    return `<tr><td>${KINDS[k].n || 'Control'}. ${esc(KINDS[k].title.replace(/^Control: a/, 'A'))}</td><td class="num">${r.attempts}</td><td class="num">${k === 'genuine' ? r.accepted + ' accepted' + (genuineOf(cfg) ? ', 1 paid' : '') : r.refused}</td><td class="num hide">${r.faults}</td></tr>`;
   }).join('');
   const off = state.off;
   const form = off
@@ -175,7 +183,9 @@ export function renderHome({ state, cfg, sitekey, limits }) {
   const body = `<h1>Try to make Clerk pay the wrong payee</h1>
 <p class="lede">Clerk reads vendor invoices and stages them for payment. Only the owner can pay, and the contract checks every payee against the wallet the vendor registered on chain. Pick an attack: the sandbox sends it as a real transaction to its own copy of the contract on ${esc(cfg?.network || 'Aevum testnet')}, and you see the answer with a link to the transaction.</p>
 <div class="stats"><div class="stat"><b>${tot.attempts}</b><span>attempts so far</span></div><div class="stat"><b>${tot.refused}</b><span>refused by a sent transaction</span></div>
-<div class="stat"><b>${units(tre)} tUSD8</b><span>in the sandbox treasury${cfg?.treasuryStart ? `, ${units(cfg.treasuryStart)} at setup` : ''}</span></div></div>
+<div class="stat"><b>${units(tre)} tUSD8</b><span>in the sandbox treasury${cfg?.treasuryStart ? `, ${units(cfg.treasuryStart)} at setup` : ''}${genuineOf(cfg) ? `; ${units(genuineOf(cfg).amount)} paid to the one genuine invoice` : ''}</span></div></div>
+${genuineOf(cfg) ? (() => { const g = genuineOf(cfg); return `<div class="item result ok" style="margin-top:10px"><span class="verdict v-ok">Paid</span><strong>The one payment: a genuine invoice</strong>
+<p style="margin:6px 0 0">Attempt <a href="/attempt/${esc(g.attempt)}">#${esc(g.attempt)}</a>, the control: Acme's own invoice for ${esc(units(g.amount))} tUSD8, to the wallet Acme registered, signed by Acme. The clerk staged it through this page (${txLink(cfg, g.stageTx)}); the owner then paid PayRunV3 run ${esc(g.run)}: ${txLink(cfg, g.paidTx)}. Every attack in the log below was refused or blocked by the contract. The form on this page never pays.</p></div>`; })() : ''}
 <h2>Attack it</h2><p>One attempt a minute per visitor, ${limits.ipDay} a day per visitor, ${limits.globalDay} a day for everyone.</p>
 ${form}
 <h2>Refusals by kind</h2><p>Since the sandbox opened. Faults are counted too, so nothing is hidden.</p>
@@ -230,7 +240,7 @@ ${detail ? `<ul class="steps">${[...detail.reasons, ...detail.warnings].slice(0,
   }
   const body = `<p style="margin-top:24px"><a href="${history ? '/history/v2' : '/'}">${history ? 'Back to the PayRunV2 history' : 'Back to the sandbox'}</a></p>
 <div class="item result ${good ? 'ok' : 'stop'}"><span class="muted">Attempt #${rec.id} · ${esc((rec.at || '').replace('T', ' ').slice(0, 19))} UTC</span>
-<div class="headline">${esc(head)}</div><div>${esc(rec.title)}</div>${stepsHtml(cfg, rec)}</div>${off}
+<div class="headline">${esc(head)}</div><div>${esc(rec.title)}</div>${stepsHtml(cfg, rec)}${!history && isPaidGenuine(cfg, rec) ? `<p style="margin:8px 0 0"><span class="verdict v-ok">Paid</span>After this attempt the owner paid this run (PayRunV3 run ${esc(genuineOf(cfg).run)}, ${esc(units(genuineOf(cfg).amount))} tUSD8 to Acme's registered wallet): ${txLink(cfg, genuineOf(cfg).paidTx)}. It is the sandbox's one payment; the form never pays.</p>` : ''}</div>${off}
 ${fresh ? '<p><a href="/">Try another attack</a></p>' : ''}`;
   return shell(`Clerk sandbox attempt ${rec.id}`, body, { cfg });
 }

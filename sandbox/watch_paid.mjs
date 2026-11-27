@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Read-only watcher for the sandbox PayRunV2 (review condition 5). Nothing here signs or sends; no keys are read.
+// Read-only watcher for the sandbox PayRunV2/V3 (review condition 5). Nothing here signs or sends; no keys are read.
 // Every check: scan Paid events since the last scanned block + read the treasury's tUSD8 balance and allowance.
-//   - Any Paid other than the setup's seed payment -> ALERT (the sandbox must never pay; "TO NON-CONTROL VENDOR" when the payee is
+//   - Any Paid other than the setup's seed payment (and, V3 from r9, the one seeded genuine payment in state.genuine_paid) -> ALERT (the sandbox must never pay; "TO NON-CONTROL VENDOR" when the payee is
 //     not Acme's registered wallet).
-//   - Treasury balance below its setup value (0.09 tUSD8) -> ALERT.
+//   - Treasury balance below its setup value (0.09 tUSD8, minus the seeded genuine payment) -> ALERT.
 //   - A failed read is a failure, never "nothing new"; 5 failures in a row -> exit 1 (so Restart=on-failure / the caller notices).
 // One log line per check (time, rc, state) in --log; stdout gets only state changes and alerts (for a Monitor).
 //
@@ -27,7 +27,10 @@ const cursorFile = logFile + '.cursor';
 const TUSD = '0x456569838f1d43009A91ebA4263147Afd7233483';
 // the V3 sandbox's vendors live in its own VendorRegistry (state.registry); the V2 sandbox's in QDay's ERC-8004 registry
 const REG = /^0x[0-9a-fA-F]{40}$/.test(st.registry || '') ? st.registry : '0xF45E7f39Caba1d2055f613970575a7e7069636Be';
-const START_TREASURY = 90_000n;
+// r9: the seeded genuine payment (seed_sandbox.mjs pay) is the one other allowed Paid: exactly its tx, run, Acme's wallet and amount.
+const GP = st.genuine_paid && /^0x[0-9a-f]{64}$/.test(st.genuine_paid.paid_tx || '') && /^\d{1,9}$/.test(st.genuine_paid.run || '') && /^\d{1,7}$/.test(st.genuine_paid.amount || '')
+  ? st.genuine_paid : null;
+const START_TREASURY = 90_000n - (GP ? BigInt(GP.amount) : 0n);
 for (const k of ['payrun', 'payrun_block', 'seed_run', 'acme_id']) if (!st[k]) die(`state file lacks ${k}`);
 
 const ABI = parseAbi([
@@ -50,6 +53,8 @@ async function check() {
     const logs = await pub.getLogs({ address: st.payrun, event: ABI[0], fromBlock: from, toBlock: to });
     for (const l of parseEventLogs({ abi: ABI, logs })) {
       if (l.args.runId === BigInt(st.seed_run)) continue;                  // the setup's own 0.01 payment to Acme
+      if (GP && l.transactionHash === GP.paid_tx && l.args.runId === BigInt(GP.run) && l.args.amount === BigInt(GP.amount)
+        && l.args.payee.toLowerCase() === acme) continue;                   // the seeded genuine payment (one tx, recorded in the state file)
       const who = l.args.payee.toLowerCase() === acme ? 'to the control vendor (Acme)' : 'TO NON-CONTROL VENDOR';
       alerts.push(`PAID ${who}: run ${l.args.runId} agent ${l.args.agentId} payee ${l.args.payee} amount ${l.args.amount} tx ${l.transactionHash}`);
     }

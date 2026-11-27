@@ -186,3 +186,34 @@ test('v3 pages: home shows the 18 kinds and the history link; history rows link 
   const hist = renderHistory({ state: { attempts: [rec] }, cfg: { ...publicConfigFrom(env3()), payrun: A('f') } });
   assert.match(hist, /href="\/history\/v2\/attempt\/3"/); assert.doesNotMatch(hist, /<script>x/); assert.doesNotMatch(hist, /href="\/attempt\//);
 });
+
+// r9: the seeded genuine payment (seed_sandbox.mjs pay -> state.genuine_paid -> mkvars seed.genuine)
+const GEN = { attempt: 20, run: '21', stageTx: '0x' + 'b'.repeat(64), paidTx: '0x' + 'c'.repeat(64), amount: '20000', paidAt: '2026-11-29T10:00:00.000Z' };
+const cfg3g = { ...cfg3, seed: { deployTx: '0x' + 'd'.repeat(64), genuine: GEN } };
+const env3g = (o = {}) => ({ SANDBOX_CONFIG: JSON.stringify(cfg3g), SANDBOX_KEYS: JSON.stringify(keys3), ...o });
+test('r9 config: seed.genuine parses on v3, refuses bad shapes and v2', () => {
+  assert.equal(parseConfig(env3g()).cfg.seed.genuine.run, '21');
+  for (const bad of [{ ...GEN, paidTx: 'javascript:1' }, { ...GEN, attempt: '20' }, { ...GEN, attempt: 0 }, { ...GEN, run: '1e9' }, { ...GEN, amount: '-1' },
+    { ...GEN, stageTx: '0x12' }, { ...GEN, paidAt: '<b>' }, null])
+    assert.throws(() => parseConfig(env3g({ SANDBOX_CONFIG: JSON.stringify({ ...cfg3, seed: { genuine: bad } }) })), /seed\.genuine/);
+  assert.throws(() => parseConfig(env({ SANDBOX_CONFIG: JSON.stringify({ ...cfg, seed: { genuine: GEN } }) })), /seed\.genuine/, 'v2 never carries it');
+  assert.equal(publicConfigFrom(env3g()).seed.genuine.paidTx, GEN.paidTx, '/api/state config shows it');
+});
+test('r9 page: the one Paid block, the paid log row, the genuine row says 1 paid; without seed.genuine none of it (control)', () => {
+  const rec = { id: 20, kind: 'genuine', title: 'Control', outcome: 'accepted', at: '2026-11-29T09:59:00Z', steps: [{ sent: true, hash: GEN.stageTx, status: 'success' }] };
+  const other = { id: 19, kind: 'payee_swap', title: 'swap', outcome: 'refused', at: '2026-11-29T09:58:00Z', steps: [{ sent: true, hash: '0x' + 'e'.repeat(64), status: 'reverted', error: 'PayeeNotRegistered' }] };
+  const state = { attempts: [rec, other], counts: { genuine: { attempts: 1, refused: 0, accepted: 1, faults: 0 } }, treasury: '70000', off: false };
+  const cfgP = { ...publicConfigFrom(env3g()), explorer: 'https://explorer-test.qday.info' };
+  const h = renderHome({ state, cfg: cfgP, sitekey: 'x', limits: limitsFrom({}) });
+  assert.match(h, /The one payment: a genuine invoice/);
+  assert.equal(h.split(`/tx/${GEN.paidTx}`).length - 1, 2, 'paid tx linked in the block and in the log row');
+  assert.match(h, /1 accepted, 1 paid/); assert.match(h, /0\.02 paid to the one genuine invoice/);
+  assert.equal((h.match(/Paid by the owner/g) || []).length, 1, 'only the genuine attempt #20 row carries the Paid note');
+  const att = renderAttempt({ rec, cfg: cfgP });
+  assert.match(att, new RegExp(`/tx/${GEN.paidTx}`));
+  assert.doesNotMatch(renderAttempt({ rec: { ...rec, id: 21 }, cfg: cfgP }), /c{64}/, 'another genuine attempt is not marked paid');
+  const h0 = renderHome({ state, cfg: { ...publicConfigFrom(env3()), explorer: 'https://explorer-test.qday.info' }, sitekey: 'x', limits: limitsFrom({}) });
+  assert.doesNotMatch(h0, /The one payment|Paid by the owner|1 paid/, 'control: no seed.genuine -> nothing claims a payment');
+  const hist = renderHistory({ state: { attempts: [rec] }, cfg: { ...cfgP, version: 'v2', payrun: A('f'), history: null } });
+  assert.doesNotMatch(hist, /Paid by the owner/, 'the V2 history never shows the V3 payment');
+});
