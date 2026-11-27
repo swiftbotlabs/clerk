@@ -1,0 +1,157 @@
+{
+ "gas_owner": "0xf5e90c6cc80fcb2b768d6496c29130b810bbbeb58fb3511459a48fd956f142a9",
+ "gas_clerk": "0x3d2f0af4ca7604f3e2130a79d70e8b532d8bb5bcca211a250c4f1acef0eec5cc",
+ "gas_daycap": "0x81e2210aa9b733910532be91b9f5aa52abcf67fd376bd968e807ac2b80e97e16",
+ "gas_revoked": "0xa3ffdd0d26251578c44a7442c723f47043f0f9d878af4f2451667484c8d35686",
+ "gas_expired": "0x81c8621e7871aa08b30474a9cda19b1e2e4412a73ed6d6c61dc8071a34bf3c47",
+ "gas_stranger": "0xc0d43c0842776445a29de9b132a6a2fe9f650d9cac746dfef292621be92c5fea",
+ "gas_registrar": "0xdb3330d1c6a699485c5c5ae5f16cb0e2d9b82d364fcdc169ae48e048e8b0eee4",
+ "gas_vendor_acme": "0x7a4f9bd4af028c33cfff4607ec345509b22f74468b8de66981e466607f089bd2",
+ "gas_treasury": "0x35d0f374de9fd0e6f34e5ad8f974b7170a4dc42ec20379076588383c7d1ab440",
+ "tusd_treasury": "0xaa0c42f0c8bcb82cf30a13cc410e8ddea6bf3189301cc8e3f2ec9b549ae83a08",
+ "registry_deploy_tx": "0xc0f670c46b38bc6c8c2446e688c094ea82bdc1f6d81f387f219b6314f5251395",
+ "registry": "0xa1a7e56cc4086dae902590e3e0c00cfdd1bbc9f4",
+ "registry_block": "4280913",
+ "acme_register": "0x26e2cd8e888318238b1da78cdb58e00461e5f7a91fafb675cbf9ea2f27ba7436",
+ "acme_id": "1",
+ "acme_name": "Acme Supplies Ltd",
+ "hijack_register": "0x380fd30c1d4fe3a43cd0a1a716f4926e15d80d8398086ffaee683ae5376b3130",
+ "hijack_id": "2",
+ "hijack_name": "Hooli Freight",
+ "new_register": "0x6b533016747ac3a9f30d1e7a034825d76772c7f888780db976306c361be3a2b1",
+ "new_id": "3",
+ "new_name": "Initech Hosting",
+ "payrun_deploy_tx": "0x26cc09b18c2f727f475be2f4b42baea1ed21a022ef00109b246d8cf40cc1fd44",
+ "payrun": "0x09c26cfd140da0c5d6cf226a4c1e1fb208211a2c",
+ "payrun_block": "4280932",
+ "approve_cap": "0xfbd207a7a189dac3b361e52680012389a1e5e4cec0fa7ff0f4277ad5de82c4b7",
+ "hold_window": "0x5ddef6ccd7ef663e5bceded9405b14b4b75441eca8e240379e60670fa61f55c5",
+ "signed_only_acme": "0x70289272c3c6679c70da15a99970a0e7f727c67f22b915b6bd2ae70e3817007a",
+ "confirm_acme": "0x0094921f2bdbd92f5a80aedc034b40938b278063bbf22a3b5df8622f4a58af18",
+ "confirm_hijack": "0x395a708f64e5d0f8f3862c528e0909f1bd6bf58eee0d1ccf5b6d6bf13caf395c",
+ "grant_clerk": "0x6c9ebd6135a2e5cced59a85ce2f83fddec7ece18b5fcab37929ecc6cf4633af0",
+ "grant_daycap": "0xbd4799f99159efc9c90ff7fbed0c19fd04add763b02ac6651675e3ee027375c2",
+ "grant_revoked": "0xadf6db2b13ad2e99d71dc1819086c4264796fdf6a7ced088a92283ffe69de626",
+ "revoke_revoked": "0xecbd953832ca20bfc239230ba404f277a948f1119fd7d4f19f952de701542f74",
+ "grant_expired": "0xda08acd0e929aad5ec52bd99d5c17adee296026cb4a863a4a337981e813711b1",
+ "paid_invoice_hash": "0x68c5f6384d5f4299eeaa23e7c787d468683acdcef140de87e52573b244c13a8e",
+ "seed_stage": "0xbb505a671e4d31a41e597530f76f90610a23c289fc05d4de922ad38a7a2aeaa7",
+ "seed_run": "1",
+ "seed_execute": "0x0f7915dfbbbf2f767df650b8bf215f927bf0903e38d65145200f82f9455a6b21",
+ "expired_at": "1795804957",
+ "checks": [
+  {
+   "name": "owner is the sandbox owner",
+   "ok": true,
+   "got": "0x9690A4d92Bf3654cb9a68Ae38E2A8C58B9E5f959"
+  },
+  {
+   "name": "treasury is the sandbox treasury",
+   "ok": true,
+   "got": "0x063b128B7237d65f2A451c1891397BB294422595"
+  },
+  {
+   "name": "token/registry are tUSD8/our VendorRegistry",
+   "ok": true,
+   "got": "addresses"
+  },
+  {
+   "name": "allowance <= 0.10 tUSD8 (0.09 after the seed payment)",
+   "ok": true,
+   "got": "90000"
+  },
+  {
+   "name": "treasury holds <= 0.10 tUSD8",
+   "ok": true,
+   "got": "90000"
+  },
+  {
+   "name": "hold window 3 days",
+   "ok": true,
+   "got": "259200"
+  },
+  {
+   "name": "seed invoice paid",
+   "ok": true,
+   "got": "1"
+  },
+  {
+   "name": "clerk session: run cap 0.10",
+   "ok": true,
+   "got": "100000"
+  },
+  {
+   "name": "daycap session: 0.06 / 0.10",
+   "ok": true,
+   "got": "caps"
+  },
+  {
+   "name": "revoked session revoked",
+   "ok": true,
+   "got": "true"
+  },
+  {
+   "name": "stranger has no session",
+   "ok": true,
+   "got": "0"
+  },
+  {
+   "name": "acme trusted",
+   "ok": true,
+   "got": "state"
+  },
+  {
+   "name": "hijack trusted",
+   "ok": true,
+   "got": "state"
+  },
+  {
+   "name": "VendorRegistry owner is the registrar",
+   "ok": true,
+   "got": "owner"
+  },
+  {
+   "name": "acme registered to its wallet",
+   "ok": true,
+   "got": "acme"
+  },
+  {
+   "name": "hijack registered to its wallet",
+   "ok": true,
+   "got": "hijack"
+  },
+  {
+   "name": "new registered to its wallet",
+   "ok": true,
+   "got": "new"
+  },
+  {
+   "name": "acme signedOnly",
+   "ok": true,
+   "got": "acme"
+  },
+  {
+   "name": "hijack/new not signedOnly",
+   "ok": true,
+   "got": "flags"
+  }
+ ],
+ "chain_id": 44005,
+ "rpc": "https://rpc-test.qday.info",
+ "mode": "testnet",
+ "version": "v3",
+ "addresses": {
+  "funder": "0x310aaBFbb6d29DC3ac864448E72c8cD63e3a25Bf",
+  "owner": "0x9690A4d92Bf3654cb9a68Ae38E2A8C58B9E5f959",
+  "treasury": "0x063b128B7237d65f2A451c1891397BB294422595",
+  "clerk": "0xD6665763729F777b8547df4e1360A8b74d336251",
+  "revoked": "0x762d799bCB26f68e20FE10Ff8fe05AeB44a4B5d4",
+  "expired": "0xD124Fb8e719614aCb7e156EeBDEDFf71Ed9eF05B",
+  "stranger": "0x814A7c87158Fb118269f4Aeb445F074c9e5f7C58",
+  "daycap": "0xd94b6E4daA2eB3f5E145658035b6c279344d2102",
+  "registrar": "0x71805d65a8bd84FaAF18bE8A00B12EECe2E5b1Bc",
+  "vendor_acme": "0x1286FCFb3FB415C5013C3B6daeFc739a83661CF0",
+  "vendor_hijack": "0x2ca81eDEC22801F0d0eA4388CA7E94D2efECe28D",
+  "vendor_new": "0xC4A65962669bC9C18010E3b7a2B97930D80a3A91"
+ }
+}

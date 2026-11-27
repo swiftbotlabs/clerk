@@ -1,0 +1,9 @@
+{
+ "payrun_v3": "0x1447B820a51bb83FC58fB13BF3b8c791361C682b",
+ "payrun_v3_deploy_tx": "0xff0a4ad542f719ba77e9bacc26467957450860fb8dc09e30d523b9506d04084e",
+ "payrun_v3_block": "4281230",
+ "registry": "0x428981983c3aa672c27ea5a469e2d0e37dc646a1",
+ "setup_tx": "0xb3dff90e4076584e18e23ce804c12fefda45eea4cc2df0baa249fb04eb595048",
+ "stage_run": "1",
+ "stage_tx": "0x1709190405888ac6645c5ca0865806423ffda2b2ecf65f3877227e0449bf255e"
+}
