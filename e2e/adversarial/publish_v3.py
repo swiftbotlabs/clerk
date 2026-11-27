@@ -1,10 +1,12 @@
 """Put a finished PayRunV3 (vendor-signed invoices) full-160 TESTNET run in place next to the PayRunV2 one (no chain writes, no git).
 
-    python3 e2e/adversarial/publish_v3.py WORKDIR      # WORKDIR = the --work dir of testnet_eval.mjs --testnet --payrun v3 --set full
+    python3 e2e/adversarial/publish_v3.py WORKDIR [--name V3b]   # WORKDIR = the --work dir of testnet_eval.mjs --testnet --payrun v3 --set full
+    --name V3b (r9b): publish as TESTNET-EVAL-V3b.md + testnet-eval-v3b.json (never overwrites an existing file); a run made with the
+    source fallback (report.json sourceFallback: true) must use a new name, so the 30/55 V3 report stays as history.
 
 Gates (any failure exits 1 and writes nothing): report.json is a testnet PayRunV3 run of the full set with signedOnly ON, against
 our own VendorRegistry; 0 wrong
-outcomes in its own score; genuine 55/55 (rules) and 30/55 (hostile); the judge rerun (sandbox/judge_rerun.mjs, public RPC,
+outcomes in its own score; genuine 55/55 (rules) and 30/55 (hostile; 55/55 when the run had the source fallback on); the judge rerun (sandbox/judge_rerun.mjs, public RPC,
 read-only) exits 0; b_compare.py against the published PayRunV2 run (testnet-eval.json) exits 0 (same attack lines, nothing refused
 before is accepted now). Then copies report.md -> TESTNET-EVAL-V3.md and report.json -> testnet-eval-v3.json and prints the
 before/after table and the numbers for the submission text.
@@ -29,8 +31,13 @@ def die(m: str) -> None:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        die("usage: publish_v3.py WORKDIR")
+    name = "V3"
+    if len(argv) == 4 and argv[2] == "--name":
+        name = argv[3]
+    elif len(argv) != 2:
+        die("usage: publish_v3.py WORKDIR [--name V3b]")
+    if not re.fullmatch(r"V3[b-z]?", name):
+        die("--name is V3 or V3b..V3z")
     work = Path(argv[1]).resolve()
     rj, rm = work / "report.json", work / "report.md"
     for p in (rj, rm):
@@ -56,8 +63,18 @@ def main(argv: list[str]) -> int:
     wrong += sum(int(v) for v in s["attacker_balances"].values()) + sum(c["paid"] for c in r["result"]["C"])
     if wrong:
         die(f"{wrong} wrong outcomes in the run's own score")
-    if (s["rules"]["genuine_paid"], s["hostile"]["genuine_paid"], s["rules"]["genuine_total"]) != (55, 30, 55):
-        die(f"genuine paid rules {s['rules']['genuine_paid']} hostile {s['hostile']['genuine_paid']} (expected 55 / 30 of 55)")
+    fb = r.get("sourceFallback") is True
+    if fb and name == "V3":
+        die("a source-fallback run is published under a new name (--name V3b): TESTNET-EVAL-V3.md stays as history")
+    want_h = 55 if fb else 30
+    if (s["rules"]["genuine_paid"], s["hostile"]["genuine_paid"], s["rules"]["genuine_total"]) != (55, want_h, 55):
+        die(f"genuine paid rules {s['rules']['genuine_paid']} hostile {s['hostile']['genuine_paid']} (expected 55 / {want_h} of 55)")
+    b = r["result"]["B"]
+    if fb and (len(b) != 130 or sum(1 for x in b if x.get("hash")) != 130):
+        die(f"layer B: {sum(1 for x in b if x.get('hash'))}/{len(b)} refused on chain (expected 130/130)")
+    out_md, out_json = HERE / f"TESTNET-EVAL-{name}.md", HERE / f"testnet-eval-{name.lower()}.json"
+    if name != "V3" and not test_rpc and (out_md.exists() or out_json.exists()):
+        die(f"{out_md.name} or {out_json.name} already exists: not overwriting")
     rpc = test_rpc or "https://rpc-test.qday.info"
     j = subprocess.run(["node", "judge_rerun.mjs", "--report", str(rj), "--rpc", rpc], cwd=APP / "sandbox", capture_output=True, text=True, timeout=1800)
     if j.returncode != 0:
@@ -71,14 +88,13 @@ def main(argv: list[str]) -> int:
         print("REHEARSAL OK (fork report): nothing copied")
         print(c.stdout)
         return 0
-    shutil.copyfile(rm, HERE / "TESTNET-EVAL-V3.md")
-    shutil.copyfile(rj, HERE / "testnet-eval-v3.json")
-    b = r["result"]["B"]
-    print(json.dumps({"txs": len(r["txs"]), "gas_tqday": s["gas_tqday"], "genuine_rules": "55/55", "genuine_hostile": "30/55",
+    shutil.copyfile(rm, out_md)
+    shutil.copyfile(rj, out_json)
+    print(json.dumps({"txs": len(r["txs"]), "gas_tqday": s["gas_tqday"], "genuine_rules": "55/55", "genuine_hostile": f"{want_h}/55", "source_fallback": fb,
                       "b_lines": len(b), "b_refused": sum(1 for x in b if x.get("hash")), "b_offchain_only": sum(1 for x in b if not x.get("hash")),
                       "payruns": r["payruns"], "registry": r["registry"]}, indent=1))
     print(c.stdout)
-    print("copied: e2e/adversarial/TESTNET-EVAL-V3.md, e2e/adversarial/testnet-eval-v3.json")
+    print(f"copied: e2e/adversarial/{out_md.name}, e2e/adversarial/{out_json.name}")
     return 0
 
 

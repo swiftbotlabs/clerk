@@ -801,7 +801,7 @@ function writeReport() {
   L.push('');
   L.push(`Check it read-only (no keys): \`cd sandbox && npm run judge:testnet-eval\` re-reads every transaction above from the public RPC and re-derives the outcome table. Corpus: \`e2e/adversarial/gen.py --seed 8004 --scale 1000 --wallets <the vendor and attacker addresses in testnet-eval.json>\`, then \`e2e/adversarial/tn_plan.py ${full ? 'full' : 'subset'}\` (truth.json sha256 ${st.corpusSha || 'n/a'}).`);
   writeFileSync(`${work}/report.md`, L.join('\n') + '\n');
-  writeFileSync(`${work}/report.json`, JSON.stringify({ mode: st.mode, ...(st.contract === 'PayRunV3' ? { contract: 'PayRunV3', signedOff: !!st.signedOff, registry: st.registry || QDAY_REG, registryKind: st.registryKind || 'qday' } : {}), set: st.set || (st.subset.files === 16 ? 'subset' : 'full'), corpusSha: st.corpusSha || null,
+  writeFileSync(`${work}/report.json`, JSON.stringify({ mode: st.mode, ...(st.contract === 'PayRunV3' ? { contract: 'PayRunV3', signedOff: !!st.signedOff, registry: st.registry || QDAY_REG, registryKind: st.registryKind || 'qday' } : {}), ...(st.sourceFallback !== undefined ? { sourceFallback: st.sourceFallback } : {}), set: st.set || (st.subset.files === 16 ? 'subset' : 'full'), corpusSha: st.corpusSha || null,
     scale: SCALE, perRun: PER_RUN.toString(), perDay: PER_DAY.toString(), float: st.float || null, payruns: st.payruns, vendorIds: st.vendorIds, addresses: st.addresses, subset: st.subset,
     result: st.result, txs: st.txs }, (k, v) => (typeof v === 'bigint' ? v.toString() : v), 1));
   log(`report: ${work}/report.md`);
