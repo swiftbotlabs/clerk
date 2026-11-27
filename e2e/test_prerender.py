@@ -41,8 +41,8 @@ LOOKALIKE = {"file": "x.txt", "decision": "HOLD", "cop": "CLOSE_MATCH", "propose
 
 class FakeChain:
     """runs[(payrun, id)] = (status, stagedAt); can[(payrun, id)] = (ok, line, reason, releaseAt) or None (v1: call reverts)."""
-    def __init__(self, runs, can, unreadable=()):
-        self.runs, self.can, self.unreadable = runs, can, set(unreadable)
+    def __init__(self, runs, can, unreadable=(), on_hold=()):
+        self.runs, self.can, self.unreadable, self.on_hold = runs, can, set(unreadable), set(on_hold)
 
     def __call__(self, *a, tries=3):
         if a[0] == "block":
@@ -64,6 +64,8 @@ class FakeChain:
                 if c is None:
                     raise RuntimeError("cast call: execution reverted")
                 return "\n".join(str(x).lower() for x in c)
+            if sig.startswith("lineMeta("):
+                return f"1\n{'true' if k in self.on_hold else 'false'}"
             if sig.startswith("lineOf("):
                 return f"(1699, {GLOBEX}, 100000 [1e5], 0x{'ab' * 32}, 0x{'cd' * 32})"
         raise AssertionError(f"unexpected cast {a}")
@@ -113,6 +115,11 @@ class Render(unittest.TestCase):
             chain = FakeChain({(V2, 1): (1, NOW - 100)}, {(V2, 1): (False, 0, 2, NOW + 999)})
             _, _, text = self.render(chain, [LOOKALIKE], [item(1, 1699, "Globex Logistics", "100000", "G-80", "test line")])
             self.assertIn("PayRunV2 (earlier contract, history) run 1: Held", text)
+            # r8: an expired run on an earlier contract is shown but not counted in the headline once a PayRunV3 is pinned
+            chain2 = FakeChain({(V2, 1): (1, NOW - 8 * 86400)}, {(V2, 1): (False, 0, 0, 0)})
+            _, head2, text2 = self.render(chain2, [], [item(1, 1699, "Globex Logistics", "100000", "G-80", "n")])
+            self.assertIn("PayRunV2 (earlier contract, history) run 1: Expired, not paid", text2)
+            self.assertEqual(head2, "Nothing is waiting for you")
         finally:
             prerender.V3PAGE = old
         _, _, text = self.render(chain, [LOOKALIKE], [item(1, 1699, "Globex Logistics", "100000", "G-80", "test line")])
@@ -140,9 +147,51 @@ class Render(unittest.TestCase):
     def test_expired_and_unreadable_runs_say_so(self):
         chain = FakeChain({(V2, 1): (1, NOW - 8 * 86400), (V2, 2): (1, NOW - 100)}, {(V2, 2): (True, 0, 0, 0)}, unreadable=[(V2, 2)])
         _, head, text = self.render(chain, [], [item(1, 1699, "Globex Logistics", "100000", "G-80", "n"), item(2, 1698, "Acme Supplies Ltd", "100000", "P", "n")])
-        self.assertIn("Expired: staged more than 7 days ago", text)
+        self.assertIn("Expired, not paid: staged more than 7 days ago", text)
         self.assertIn("Could not read this run from the chain", text)
         self.assertEqual(head, "1 run that can no longer pay (reject it), 1 run could not be read from the chain")
+
+    def test_held_text_stays_true_until_the_next_build(self):
+        """r8: a line staged during the hold says only a confirmation releases it (true before AND after the hold ends), and every
+        held run says until when it can be paid. Control: a reason-1 line NOT staged on hold keeps the 'hold ends' wording."""
+        chain = FakeChain({(V2, 1): (1, NOW - 100)}, {(V2, 1): (False, 0, 1, NOW + 3600)}, on_hold=[(V2, 1)])
+        _, head, text = self.render(chain, [], [item(1, 1699, "Globex Logistics", "100000", "G-80", "n")])
+        self.assertEqual(head, "1 held payment to confirm or reject")
+        self.assertIn("waiting won't release this run: only your confirmation does", text)
+        self.assertNotIn("The hold ends", text)
+        self.assertIn(f"This run can be paid until {prerender.when(NOW - 100 + 7 * 86400)}; after that it expires unpaid.", text)
+        chain = FakeChain({(V2, 1): (1, NOW - 100)}, {(V2, 1): (False, 0, 1, NOW + 3600)})
+        _, _, text = self.render(chain, [], [item(1, 1699, "Globex Logistics", "100000", "G-80", "n")])
+        self.assertIn("The hold ends", text)
+
+    def test_expired_run_is_not_paid_and_not_held(self):
+        """r8: past RUN_TTL the run is 'Expired, not paid', never counted as held, even though the chain still says Staged."""
+        chain = FakeChain({(V2, 1): (1, NOW - 7 * 86400 - 1)}, {(V2, 1): (False, 0, 0, 0)}, on_hold=[(V2, 1)])
+        _, head, text = self.render(chain, [], [item(1, 1699, "Globex Logistics", "100000", "G-80", "n")])
+        self.assertIn("PayRunV2 run 1: Expired, not paid", text)
+        self.assertNotIn("Payment held", text)
+        self.assertEqual(head, "1 run that can no longer pay (reject it)")
+
+    def test_refresh_record_lists_the_latest_hold_restart(self):
+        """r8: with a refresh in e2e/testnet_v3page.json, the testnet record lists its txs and names the live run."""
+        tmp = Path(tempfile.mkdtemp()) / "v3.json"
+        h = lambda c: "0x" + c * 64
+        tmp.write_text(json.dumps({"payrun_v3": "0x1447B820a51bb83FC58fB13BF3b8c791361C682b", "registry": "0x428981983c3aa672c27ea5a469e2d0e37dc646a1",
+                                   "payrun_v3_deploy_tx": h("1"), "setup_tx": h("2"), "stage_run": "2", "stage_tx": h("7"),
+                                   "last_refresh": {"reject_tx": h("3"), "suspend_tx": h("4"), "observe_tx": h("5"), "reinstate_tx": h("6"), "run": 2}}))
+        old = prerender.V3PAGE
+        try:
+            prerender.V3PAGE = tmp
+            chain = FakeChain({(V2, 1): (3, NOW - 100)}, {})
+            _, _, text = self.render(chain, [LOOKALIKE], [item(1, 1699, "Globex Logistics", "100000", "G-80", "n")])
+        finally:
+            prerender.V3PAGE = old
+        for want in ("Hold restart: Acme suspended in the VendorRegistry: 0x44444444", "records the suspension (observePayee): 0x55555555",
+                     "Acme reinstated with the same wallet: the contract holds it again: 0x66666666",
+                     "PayRunV3 run 2 (shown above) staged by the clerk with the vendor's signature (held: Acme was suspended and reinstated",
+                     "rejected by the owner's smart account before a fresh demo run (nothing was paid): 0x33333333"):
+            self.assertIn(want, text)
+        self.assertNotIn("PayRunV3 run 1 staged", text)
 
     def test_page_keeps_csp_and_external_script(self):
         page = (Path(__file__).resolve().parent.parent / "web/index.html").read_text()

@@ -86,12 +86,25 @@ def slip(it: dict, hold: dict | None = None) -> str:
             f'<div class="meta">{verdict} Invoice {esc(p["reference"])}{due}, to {esc(short(p["wallet"]))}</div>{src}</div>')
 
 
+EXPIRED = "Expired, not paid: staged more than 7 days ago, so it can no longer be paid"   # same words as web/app.js
+
+
 def when(t: int) -> str:
     return datetime.fromtimestamp(int(t), timezone.utc).strftime("%d %b %Y %H:%M UTC")
 
 
-def hold_of(payrun: str, rid: int, its: list[dict]) -> dict | None:
-    """Same reading as the page's holdOf(): PayRunV2.canExecute, then the blocked line. v1 has no canExecute -> None."""
+def staged_on_hold(payrun: str, rid: int, line: str) -> bool:
+    """lineMeta(run, line).stagedOnHold: the line can only be released by the owner's confirmation (unreadable = False)."""
+    try:
+        return cast("call", payrun, "lineMeta(uint256,uint256)(uint32,bool)", str(rid), line).split("\n")[1].strip() == "true"
+    except (RuntimeError, IndexError):
+        return False
+
+
+def hold_of(payrun: str, rid: int, its: list[dict], staged_at: int = 0) -> dict | None:
+    """Same reading as the page's holdOf(): PayRunV2.canExecute, then the blocked line. v1 has no canExecute -> None.
+    The text is rendered once at build time, so it must stay true until the next build: a line staged during the hold says
+    "only your confirmation releases it" (true before and after the hold's end), and a held run says until when it can be paid."""
     try:
         ok, line, reason, release = cast("call", payrun, "canExecute(uint256)(bool,uint256,uint8,uint64)", str(rid)).split("\n")[:4]
     except RuntimeError:
@@ -103,11 +116,18 @@ def hold_of(payrun: str, rid: int, its: list[dict]) -> dict | None:
     agent, payee = l.strip("()").split(", ")[:2]
     name = next((i["registered_name"] for i in its if str(i.get("agent_id")) == agent), f"agent #{agent}")
     n, w = esc(name), esc(short(payee))
-    text = (f"<strong>Payment held.</strong> {n}'s wallet {w} is new or just changed. The hold ends {esc(when(release))}. Check the new details with the vendor on a number you already have (not one from the invoice), then confirm the payee, or reject the run."
+    if reason == 1 and staged_on_hold(payrun, rid, line.split()[0]):
+        text = (f"<strong>Payment held.</strong> {n}'s wallet {w} was new or had just changed when this run was staged (hold until {esc(when(release))}), "
+                "so waiting won't release this run: only your confirmation does. Check the wallet with the vendor on a number you already have "
+                "(not one from the invoice), then confirm the payee, or reject the run.")
+    else:
+        text = (f"<strong>Payment held.</strong> {n}'s wallet {w} is new or just changed. The hold ends {esc(when(release))}. Check the new details with the vendor on a number you already have (not one from the invoice), then confirm the payee, or reject the run."
             if reason == 1 else
             f"<strong>Payment held.</strong> This run was staged while {n}'s wallet {w} was still on hold, so waiting won't release it. Check the wallet with the vendor on a number you already have, then confirm the payee, or reject the run."
             if reason == 2 else
             f"<strong>Can't be paid.</strong> {n}'s registered wallet changed after this run was staged. Reject it; the clerk stages it again and the new wallet is held.")
+    if reason in (1, 2) and staged_at:
+        text += f" This run can be paid until {esc(when(staged_at + RUN_TTL))}; after that it expires unpaid."
     return {"reason": reason, "agent": agent, "payee": payee, "text": text}
 
 
@@ -158,11 +178,23 @@ def record() -> str:
         ("The owner revokes the clerk's permission", t2["perm_revoke_tx"]),
     ]
     t3 = v3page()
+    lr = t3.get("last_refresh") or {}
+    run = str(t3.get("stage_run") or "1")
+    why = ("Acme was suspended and reinstated in the VendorRegistry just before, which the contract treats as a payee change"
+           if lr else "the payee is new to this contract")
     for label, key in (("PayRunV3 deployed for this page (vendor-signed invoices; vendors in our own VendorRegistry)", "payrun_v3_deploy_tx"),
-                       ("PayRunV3 set up by the owner's smart account (allowance, the clerk's session, Acme signs its invoices)", "setup_tx"),
-                       ("PayRunV3 run 1 staged by the clerk with the vendor's signature (held: the payee is new to this contract)", "stage_tx")):
+                       ("PayRunV3 set up by the owner's smart account (allowance, the clerk's session, Acme signs its invoices)", "setup_tx")):
         if t3.get(key):
             rows.append((label, t3[key]))
+    # a refresh (e2e/refresh_page_run.sh) keeps one live held run: the latest one's steps, in order
+    for label, key in (("Earlier PayRunV3 run(s) rejected by the owner's smart account before a fresh demo run (nothing was paid)", "reject_tx"),
+                       ("Hold restart: Acme suspended in the VendorRegistry", "suspend_tx"),
+                       ("The page's PayRunV3 records the suspension (observePayee)", "observe_tx"),
+                       ("Acme reinstated with the same wallet: the contract holds it again", "reinstate_tx")):
+        if lr.get(key):
+            rows.append((label, lr[key]))
+    if t3.get("stage_tx"):
+        rows.append((f"PayRunV3 run {run} (shown above) staged by the clerk with the vendor's signature (held: {why})", t3["stage_tx"]))
     lis = []
     for label, h in rows:
         ok = tx_ok(h)
@@ -194,10 +226,11 @@ def main(argv: list[str]) -> int:
         except RuntimeError:
             st, staged_at = 0, 0
         expired = st == 1 and now > staged_at + RUN_TTL
-        hold = hold_of(payrun, rid, its) if st == 1 and not expired else None
+        hold = hold_of(payrun, rid, its, staged_at) if st == 1 and not expired else None
         label = STATUS[st] if st < len(STATUS) else "Unknown"
         if st == 0: c["unread"] += 1
-        elif expired: c["clear"] += 1; label = "Expired: staged more than 7 days ago, so it can no longer be paid"
+        elif expired:   # an expired run on an earlier contract is history: shown, not counted as something to do (r8)
+            c["clear"] += 0 if v3page() and NAMES.get(payrun.lower()) != "PayRunV3" else 1; label = EXPIRED
         elif hold and hold["reason"] == 3: c["clear"] += 1; label = "Can't be paid: the payee changed"
         elif hold: c["held"] += 1; label = "Held: confirm the payee or reject"
         elif st == 1: c["pay"] += 1
