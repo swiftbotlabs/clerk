@@ -6,6 +6,7 @@
 //   HEADLINE='regex'       the headline must match
 //   WALK=1                 the no-wallet walkthrough must still run 4 steps and end "Paid" (simulation)
 //   V3_ADDR=0x…            the page's PayRunV3 (article keys use its first 8 hex)
+//   HISTORY=N              r9: exactly N earlier-contract runs, all inside a CLOSED #history toggle, none outside (0 = no toggle)
 // Fails (exit 1) on any miss, any page error or dialog, or any JSON-RPC call that is not a read.
 const { chromium } = require('playwright');
 const PAGE = process.env.PAGE_URL || 'http://127.0.0.1:8097/?chain=440050', OUT = process.env.OUT || '.';
@@ -45,6 +46,27 @@ let failed = 0; const fail = (m) => { console.log('PAGE STATE FAIL: ' + m); fail
         console.log(`run ${id} held text: ${t}`);
         if (!new RegExp(process.env.HELD_TEXT).test(t)) fail(`run ${id} held text !~ /${process.env.HELD_TEXT}/`);
       }
+    }
+    if (process.env.HISTORY !== undefined) {   // r9: earlier-contract runs only inside a CLOSED #history toggle (HISTORY = their count)
+      const h = await p.evaluate(() => {
+        const d = document.getElementById('history');
+        const arts = [...document.querySelectorAll('#runs article')];
+        const status = (a) => (a.querySelector('.status')?.textContent || '').trim();
+        return { exists: !!d, open: !!d?.open, summary: d?.querySelector('summary')?.innerText || '',
+          inside: d ? [...d.querySelectorAll('article')].map(status) : [], outside: arts.filter((a) => !d || !d.contains(a)).map(status) };
+      });
+      console.log('history:', JSON.stringify(h));
+      const n = Number(process.env.HISTORY);
+      if (n === 0) { if (h.exists) fail('a history toggle is shown with no earlier runs'); }
+      else {
+        if (!h.exists) fail('no #history toggle');
+        if (h.open) fail('#history is open by default');
+        if (h.inside.length !== n) fail(`#history holds ${h.inside.length} runs, want ${n}`);
+        if (h.inside.some((t) => /^PayRunV3 /.test(t))) fail('a PayRunV3 run is inside the history toggle');
+        if (!/^History: \d+ runs? on the earlier PayRun and PayRunV2 contracts/.test(h.summary)) fail(`summary "${h.summary}"`);
+      }
+      if (h.outside.some((t) => !/^PayRunV3 /.test(t))) fail('an earlier-contract run is shown outside the history toggle');
+      if (/PayRunV2|earlier/.test(head)) fail('the headline mentions an earlier contract');
     }
     await p.screenshot({ path: `${OUT}/page-state-${process.env.TAG || 'x'}.png`, fullPage: false });
     if (process.env.WALK === '1') {

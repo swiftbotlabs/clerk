@@ -120,8 +120,11 @@ async function render() {
   for (const it of items) if (it.run_id) { const k = keyOf(it.payrun, it.run_id); if (!byRun.has(k)) byRun.set(k, { payrun: it.payrun, id: it.run_id, its: [] }); byRun.get(k).its.push(it); }
   let now = Math.floor(Date.now() / 1000);
   try { now = Number((await pub().getBlock()).timestamp); } catch {}
-  const parts = [], c = { runs: byRun.size, pay: 0, held: 0, clear: 0, check: 0, unread: 0 };
+  const parts = [], hist = [], c = { runs: byRun.size, pay: 0, held: 0, clear: 0, check: 0, unread: 0 };
+  let histOpen = 0;
   for (const [k, { payrun, id, its }] of byRun) {
+    // r9: once PayRunV3 is pinned, runs on the earlier PayRun/PayRunV2 are history: listed under a closed toggle, never in the headline
+    const isHist = Boolean(V3_PAGE) && cname(payrun) !== 'PayRunV3';
     let st = 0, stagedAt = 0;
     try { const r = await pub().readContract({ address: payrun, abi: ABI, functionName: 'runs', args: [BigInt(id)] }); st = Number(r[0]); stagedAt = Number(r[2]); } catch {}
     const expired = st === 1 && now > stagedAt + RUN_TTL;
@@ -130,8 +133,9 @@ async function render() {
     const can = st === 1 && trusted(payrun);
     const v2 = ['PayRunV2', 'PayRunV3'].includes(cname(payrun)) && trusted(payrun);   // both have the payee-change hold
     const simBtn = (kind, label) => (v2 ? btn('sim', k, payrun, id, label, '', ` data-kind="${kind}"`) : '');
+    const c0 = { ...c };
     if (st === 0) c.unread++;
-    else if (expired) { if (!(V3_PAGE && cname(payrun) !== 'PayRunV3')) c.clear++; label = 'Expired, not paid: staged more than 7 days ago, so it can no longer be paid'; if (can) acts = btn('reject', k, payrun, id, 'Reject'); }
+    else if (expired) { if (!isHist) c.clear++; label = 'Expired, not paid: staged more than 7 days ago, so it can no longer be paid'; if (can) acts = btn('reject', k, payrun, id, 'Reject'); }
     else if (hold && hold.reason === 3) { c.clear++; label = 'Can\'t be paid: the payee changed'; if (can) acts = btn('reject', k, payrun, id, 'Reject'); }
     else if (hold) {
       c.held++; label = 'Held: confirm the payee or reject';
@@ -139,9 +143,10 @@ async function render() {
         + btn('confirm', k, payrun, id, 'Confirm payee', 'pay', ` disabled data-agent="${esc(hold.agent)}" data-wallet="${esc(hold.payee)}"`) + btn('reject', k, payrun, id, 'Reject');
     } else if (st === 1) { c.pay++; if (can) acts = btn('execute', k, payrun, id, 'Approve and pay', 'pay') + btn('reject', k, payrun, id, 'Reject'); }
     if (st === 1 && !expired && !(hold && hold.reason === 3)) acts += simBtn(hold ? 'held' : 'pay', hold ? 'Simulate: confirm, then pay' : 'Simulate approving (no wallet)');
+    if (isHist) { if (st === 1 && !expired) histOpen++; Object.assign(c, c0); }
     const total = its.reduce((s, i) => s + BigInt(i.units), 0n);
     const rank = st === 1 ? (hold && hold.reason !== 3 ? 0 : expired || hold ? 2 : 1) : st === 0 ? 3 : 4;   // what needs the owner comes first
-    parts.push([rank, `<article class="run ${st === 2 ? 'done' : ''}" data-key="${k}" data-run="${id}"><div class="runhead"><div><div class="status">${esc(cname(payrun))}${V3_PAGE && cname(payrun) !== 'PayRunV3' ? ' (earlier contract, history)' : ''} run ${id}: ${esc(label)}</div>
+    (isHist ? hist : parts).push([rank, `<article class="run ${st === 2 ? 'done' : ''}" data-key="${k}" data-run="${id}"><div class="runhead"><div><div class="status">${esc(cname(payrun))}${V3_PAGE && cname(payrun) !== 'PayRunV3' ? ' (earlier contract, history)' : ''} run ${id}: ${esc(label)}</div>
       <div class="total">${money(total)} <small>· ${plural(its.length, 'invoice', 'invoices')}</small></div></div>
       <div class="actions">${acts}</div></div>
       ${hold ? `<div class="slip"><div class="held" role="alert">${hold.text}</div></div>` : ''}${its.map((it) => slip(it, hold)).join('')}<div class="slip status" id="tx-${k}" aria-live="polite" ${notes[k] ? '' : 'hidden'}>${notes[k] || ''}</div></article>`]);
@@ -149,7 +154,9 @@ async function render() {
   const other = (dec) => items.filter((i) => i.decision === dec || (dec === 'HOLD' && i.decision === 'PAYABLE' && i.skip && !i.run_id && String(i.skip).startsWith('over')));
   c.check = other('HOLD').length;
   $('#headline').textContent = headline(c);
-  $('#runs').innerHTML = parts.sort((a, b) => a[0] - b[0]).map((x) => x[1]).join('') || '<p class="empty">The clerk staged nothing this time.</p>';
+  const wasOpen = Boolean(document.getElementById('history')?.open) || location.hash === '#history';
+  const histHtml = hist.length ? `<details class="history" id="history"${wasOpen ? ' open' : ''}><summary>History: ${plural(hist.length, 'run', 'runs')} on the earlier PayRun and PayRunV2 contracts (${histOpen ? plural(histOpen, 'still open', 'still open') : 'none can pay any more'})</summary>${hist.sort((a, b) => a[0] - b[0]).map((x) => x[1]).join('')}</details>` : '';
+  $('#runs').innerHTML = (parts.sort((a, b) => a[0] - b[0]).map((x) => x[1]).join('') || '<p class="empty">The clerk staged nothing this time.</p>') + histHtml;
   if (reports.some((r) => !trusted(r.payrun))) $('#runs').insertAdjacentHTML('afterbegin', '<p class="empty" role="alert">This report names a contract that is not one of Clerk\'s deployed PayRuns, so it is shown read-only.</p>');
   const card = (i, cls, label) => `<div class="item"><span class="verdict ${cls}">${label}</span> <strong>${esc(i.proposed.vendor || i.file)}</strong>
     ${i.proposed.amount ? ' · <span class="nw">' + esc(i.proposed.amount) + ' ' + esc(i.proposed.currency || '') + '</span>' : ''}<ul>${[...(i.reasons || []), ...(i.warnings || []), ...(i.skip ? [i.skip] : [])].map((r) => `<li>${esc(r)}</li>`).join('')}</ul></div>`;

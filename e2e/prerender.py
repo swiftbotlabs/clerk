@@ -211,6 +211,8 @@ def record() -> str:
 
 def main(argv: list[str]) -> int:
     page = Path(argv[1]) if len(argv) > 1 else APP / "docs/index.html"
+    if v3page():   # (again here: CLERK_V3PAGE / V3PAGE may be set after import, as in the tests)
+        NAMES[v3page()["payrun_v3"].lower()] = "PayRunV3"
     reports = [json.loads((page.parent / f).read_text()) for f in ("report.json", "report-v2.json", "report-v3.json") if (page.parent / f).exists()]
     items = [dict(i, payrun=r["payrun"]) for r in reports for i in (r.get("items") or [])]
     by_run: dict[tuple[str, int], list[dict]] = {}
@@ -218,8 +220,12 @@ def main(argv: list[str]) -> int:
         if it.get("run_id"):
             by_run.setdefault((it["payrun"], int(it["run_id"])), []).append(it)
     now = int(cast("block", "latest", "--field", "timestamp"))
-    parts, c = [], {"runs": len(by_run), "pay": 0, "held": 0, "clear": 0, "check": 0, "unread": 0}
+    parts, hist, c = [], [], {"runs": len(by_run), "pay": 0, "held": 0, "clear": 0, "check": 0, "unread": 0}
+    hist_open = 0
     for (payrun, rid), its in by_run.items():
+        # r9: once PayRunV3 is pinned, runs on PayRun/PayRunV2 are history: under a closed <details>, never in the headline
+        is_hist = bool(v3page()) and NAMES.get(payrun.lower()) != "PayRunV3"
+        c0 = dict(c)
         try:
             r = cast("call", payrun, "runs(uint256)(uint8,address,uint64,uint128,uint32)", str(rid)).split("\n")
             st, staged_at = int(r[0].split()[0]), int(r[2].split()[0])
@@ -234,10 +240,13 @@ def main(argv: list[str]) -> int:
         elif hold and hold["reason"] == 3: c["clear"] += 1; label = "Can't be paid: the payee changed"
         elif hold: c["held"] += 1; label = "Held: confirm the payee or reject"
         elif st == 1: c["pay"] += 1
+        if is_hist:
+            hist_open += 1 if st == 1 and not expired else 0
+            c.update(c0)
         total = sum(int(i["units"]) for i in its)
         held_html = f'<div class="slip"><div class="held" role="alert">{hold["text"]}</div></div>' if hold else ""
         rank = (0 if hold and hold["reason"] != 3 else 2 if expired or hold else 1) if st == 1 else 3 if st == 0 else 4
-        parts.append((rank, f'<article class="run {"done" if st == 2 else ""}" data-run="{rid}"><div class="runhead"><div>'
+        (hist if is_hist else parts).append((rank, f'<article class="run {"done" if st == 2 else ""}" data-run="{rid}"><div class="runhead"><div>'
                      f'<div class="status">{esc(NAMES.get(payrun.lower(), short(payrun)))}{" (earlier contract, history)" if v3page() and NAMES.get(payrun.lower()) != "PayRunV3" else ""} run {rid}: {esc(label)}</div>'
                      f'<div class="total">{money(total)} <small>· {plural(len(its), "invoice", "invoices")}</small></div></div>'
                      f'<div class="actions"></div></div>{held_html}{"".join(slip(i, hold) for i in its)}</article>'))
@@ -262,6 +271,10 @@ def main(argv: list[str]) -> int:
         s = s.replace(old, new)
     put('<h1 id="headline">Pay runs waiting for you</h1>', f'<h1 id="headline">{esc(head)}</h1>')
     runs_html = "".join(h for _, h in sorted(parts, key=lambda x: x[0])) or '<p class="empty">The clerk staged nothing this time.</p>'
+    if hist:
+        state = plural(hist_open, "still open", "still open") if hist_open else "none can pay any more"
+        runs_html += (f'<details class="history" id="history"><summary>History: {plural(len(hist), "run", "runs")} on the earlier PayRun and PayRunV2 '
+                      f'contracts ({state})</summary>' + "".join(h for _, h in sorted(hist, key=lambda x: x[0])) + '</details>')
     put('<section id="runs"></section>', f'<section id="runs">{runs_html}</section>')
     put('<section id="hold"></section>', f'<section id="hold">{hold}</section>')
     put('<section id="stop"></section>', f'<section id="stop">{stop}</section>\n{record()}\n'

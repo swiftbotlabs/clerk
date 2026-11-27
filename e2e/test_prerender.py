@@ -26,6 +26,7 @@ V1 = "0x2EE29a167CDDb964aAB9C899ea9Ae89847e3Da98"
 V2 = "0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541"
 NOW = 1_800_000_000
 GLOBEX = "0xdA286b3Ad1f68d4e67a70417328743d013FC6B72"
+V3 = "0x1447B820a51bb83FC58fB13BF3b8c791361C682b"
 
 
 def item(run, agent, name, units, ref, payrun_note=None):
@@ -72,7 +73,7 @@ class FakeChain:
 
 
 class Render(unittest.TestCase):
-    def render(self, chain, v1_items, v2_items):
+    def render(self, chain, v1_items, v2_items, v3_items=None):
         work = Path(__file__).resolve().parent / "work"
         work.mkdir(exist_ok=True)
         d = Path(tempfile.mkdtemp(dir=work, prefix="prerender-test-"))
@@ -82,6 +83,8 @@ class Render(unittest.TestCase):
         (d / "report.json").write_text(json.dumps({"payrun": V1, "items": v1_items}))
         if v2_items is not None:
             (d / "report-v2.json").write_text(json.dumps({"payrun": V2, "items": v2_items}))
+        if v3_items is not None:
+            (d / "report-v3.json").write_text(json.dumps({"payrun": V3, "items": v3_items}))
         old = prerender.cast
         prerender.cast = chain
         try:
@@ -124,6 +127,39 @@ class Render(unittest.TestCase):
             prerender.V3PAGE = old
         _, _, text = self.render(chain, [LOOKALIKE], [item(1, 1699, "Globex Logistics", "100000", "G-80", "test line")])
         self.assertIn("PayRunV2 run 1: Held", text)
+
+    def test_v3_pinned_hides_earlier_runs_behind_history_toggle(self):
+        """r9: with PayRunV3 pinned, the V3 runs are shown and counted; PayRun/PayRunV2 runs sit in a CLOSED <details id=history>,
+        never in the headline, and its summary says whether any is still open. Control: unpinned, no toggle and V2 counted."""
+        tmp = Path(tempfile.mkdtemp()) / "v3.json"
+        tmp.write_text(json.dumps({"payrun_v3": V3, "registry": "0x428981983c3aa672c27ea5a469e2d0e37dc646a1"}))
+        old = prerender.V3PAGE
+        runs = {(V1, 3): (2, NOW - 100), (V2, 1): (1, NOW - 100), (V3, 2): (1, NOW - 100)}
+        can = {(V2, 1): (False, 0, 2, NOW + 999), (V3, 2): (False, 0, 2, NOW + 999)}
+        v1 = [item(3, 1698, "Acme Supplies Ltd", "250000", "INV-1006")]
+        v2 = [item(1, 1699, "Globex Logistics", "100000", "G-80", "test line")]
+        v3 = [item(2, 1, "Acme Supplies Ltd", "50000", "INV-3002", "signed")]
+        try:
+            prerender.V3PAGE = tmp
+            page, head, text = self.render(FakeChain(runs, can), v1, v2, v3)
+            self.assertEqual(head, "1 held payment to confirm or reject", "only the PayRunV3 run is counted")
+            m = re.search(r'<details class="history" id="history">(.*?)</details>', page, re.S)
+            self.assertIsNotNone(m, "earlier runs are behind the history toggle")
+            self.assertNotRegex(page, r'<details class="history" id="history" open', "closed by default")
+            self.assertIn("History: 2 runs on the earlier PayRun and PayRunV2 contracts (1 still open)", html.unescape(m.group(1)))
+            self.assertIn("PayRunV2 (earlier contract, history) run 1", html.unescape(m.group(1)))
+            self.assertIn("PayRun (earlier contract, history) run 3", html.unescape(m.group(1)))
+            self.assertNotIn("PayRunV3", m.group(1))
+            self.assertLess(page.index("PayRunV3 run 2: Held"), page.index('<details class="history"'))
+            # all earlier runs closed -> "none can pay any more"
+            runs2 = dict(runs); runs2[(V2, 1)] = (3, NOW - 100)
+            page2, _, _ = self.render(FakeChain(runs2, can), v1, v2, v3)
+            self.assertIn("(none can pay any more)", page2)
+        finally:
+            prerender.V3PAGE = old
+        page0, head0, _ = self.render(FakeChain(runs, can), v1, v2, None)
+        self.assertNotIn('id="history"', page0, "control: no PayRunV3 pinned, no history toggle")
+        self.assertEqual(head0, "1 held payment to confirm or reject")
 
     def test_lookalike_alone_is_not_nothing_waiting(self):
         chain = FakeChain({(V1, 3): (2, NOW - 100)}, {})
