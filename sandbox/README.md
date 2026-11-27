@@ -13,7 +13,7 @@ paid invoice, the clerk's key calling `execute`, a revoked key, an expired key, 
 staging, a brand-new payee with no owner confirmation, a duplicate line in one run, and a zero amount. A genuine invoice to the registered
 wallet is the control and is accepted.
 
-## Seeded on 25 Nov through the public page
+## Seeded on 25 Nov through the public page (by us, to start the log)
 15 attempts, 14 refused on chain with the expected error (PayeeNotRegistered, RunCapExceeded, DayCapExceeded, AlreadyPaid, NotOwner,
 SessionRevokedErr, SessionExpired, NoSession, AlreadyStaged, ZeroAmount; the hijack and the new payee are executed by the owner and the
 contract emits `PaymentBlocked` instead of paying), the genuine control accepted, 0 faults, the 0.09 test tUSD8 treasury untouched.

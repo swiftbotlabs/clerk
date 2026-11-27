@@ -52,6 +52,8 @@ const QDAY_REG = '0xF45E7f39Caba1d2055f613970575a7e7069636Be';   // QDay's ERC-8
 let REG = QDAY_REG;   // PayRunV3 runs: our own VendorRegistry by default (--registry qday keeps QDay's)
 const TUSD = '0x456569838f1d43009A91ebA4263147Afd7233483';
 const TESTNET_RPC = 'https://rpc-test.qday.info';
+// Every published testnet report says plainly who staged its runs (judge to-do, 27 Nov).
+const EVAL_LABEL = '**Staged by the eval script (fixed keys), not by a person.** Every run and transaction in this report was staged, executed and swapped by `sandbox/testnet_eval.mjs` with fixed test keys; the "owner" is that script acting as a rubber stamp. The approval page\'s runs are listed separately in the README\'s Aevum testnet table, with how each was staged and approved.';
 const EXPLORER = 'https://explorer-test.qday.info';
 const APP = new URL('..', import.meta.url).pathname;
 const ADV = APP + 'e2e/adversarial/';
@@ -700,6 +702,7 @@ function writeReport() {
   const L = [];
   L.push(`# Clerk adversarial eval: ${st.mode === 'testnet' ? 'Aevum TESTNET run' : 'REHEARSAL on a local anvil fork of Aevum testnet (not testnet evidence)'}`);
   L.push('');
+  if (st.mode === 'testnet') { L.push(EVAL_LABEL); L.push(''); }
   L.push('**Check it yourself (one command each, from the repo root):**');
   L.push('- `make judge-rerun`: read-only, no keys. Re-reads every transaction below from the public RPC (https://rpc-test.qday.info), checks sender, status, block and gas, compares both PayRunV2s with the repo\'s compiled code, regenerates the corpus from its seed and re-derives the outcome table from the Paid events; prints MATCH or MISMATCH per row (Node 18+, Python 3; Foundry optional, for the bytecode check). Same as `cd sandbox && npm ci --omit=dev && npm run judge:testnet-eval`.');
   L.push('- `make local-eval`: the same 160-invoice attack set, unscaled, on a local anvil chain (Foundry; a few minutes); writes `e2e/work/adversarial/report.md` ([local report](../reports/adversarial-eval-2026-11-22.md)).');

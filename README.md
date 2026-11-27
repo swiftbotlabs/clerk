@@ -4,7 +4,7 @@
 
 **Try it:** approval page https://clerk.swiftbotlab.workers.dev/ (server-rendered: the testnet run and record show with no wallet and no JavaScript) · demo video (3:01) https://youtu.be/WpnxGX7nYnM ·
 PayRun [`0x2EE2…Da98`](https://explorer-test.qday.info/address/0x2EE29a167CDDb964aAB9C899ea9Ae89847e3Da98) ·
-PayRunV2 [`0x89d1…F541`](https://explorer-test.qday.info/address/0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541) · every transaction in [Aevum testnet](#aevum-testnet).
+PayRunV2 [`0x89d1…F541`](https://explorer-test.qday.info/address/0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541) · every transaction in [Aevum testnet](#aevum-testnet); every contract with its verification status in [Deployments](#deployments-aevum-testnet-chain-44005).
 
 **Architecture in one page:** [ARCHITECTURE.md](ARCHITECTURE.md) (the canonical path: PayRunV2 + the clerk's key as a Kernel permission). **Adversarial eval:** [160 attack and control invoices, 0 wrong payments, on Aevum testnet: 247 transactions](e2e/adversarial/TESTNET-EVAL.md).
 
@@ -16,7 +16,7 @@ PayRunV2 [`0x89d1…F541`](https://explorer-test.qday.info/address/0x89d14Bf88D8
 | **2. Approve and pay without a wallet (simulation).** On the same page, press **Start** in "Try the approval flow without a wallet" and click through 4 steps: the clerk stages a new vendor's first invoice, it is **held**, "Approve and pay" is **blocked**, the owner confirms the payee, then it is **paid**. Each step is an `eth_call` to the live [PayRunV2](https://explorer-test.qday.info/address/0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541) made as the owner's address ([web/sim.js](web/sim.js), [DemoProbe.sol](contracts/src/sim/DemoProbe.sol)); every line is labelled Simulation, nothing is signed or sent. The runs on the page have the same "Simulate" button. | ![Simulation](media/walkthrough/2-simulation-desktop.png) | ![Simulation, phone](media/walkthrough/2-simulation-390.png) |
 | **3. Watch the AI propose and the rules decide.** Open the [extractor demo](https://clerk-sandbox.swiftbotlab.workers.dev/extract?sample=injection), keep the prompt-injection sample or paste your own invoice, press the button. A hosted model (Llama 3.2 3B on Cloudflare Workers AI, Granite 4.0 Micro as fallback; no tools, no keys) proposes a payment line; Clerk's `check.py` rules (ported line for line) stop it because the wallet is not the vendor's registered one. Nothing is sent. | ![Extractor demo](media/walkthrough/3-extractor-desktop.png) | ![Extractor demo, phone](media/walkthrough/3-extractor-390.png) |
 | **4. Attack the contract yourself.** On the [sandbox](https://clerk-sandbox.swiftbotlab.workers.dev/), pick an attack (payee swap, injection, look-alike, cap tricks, stolen or revoked keys, wallet hijack...) and press attack: it is sent as a real Aevum testnet transaction and refused on chain, with the explorer link. The [live log](https://clerk-sandbox.swiftbotlab.workers.dev/log) shows every attempt. | ![Sandbox refusal](media/walkthrough/4-sandbox-refusal-desktop.png) | ![Sandbox refusal, phone](media/walkthrough/4-sandbox-refusal-390.png) |
-| **5. Check the evidence.** The [testnet eval](e2e/adversarial/TESTNET-EVAL.md): all 160 invoices of the attack set (30 genuine, 25 redirects, 25 prompt injections, 25 look-alikes, 25 model-edited lines, 10 edited amounts, 5 over the cap, 15 re-sent copies) run through the real pipeline on Aevum testnet with a rubber-stamp owner, the attacker's lines also sent straight to the contract, and three registry wallet swaps: 247 transactions, 0 wrong payments, every transaction linked ([first 16-invoice slice](e2e/adversarial/TESTNET-EVAL-16.md)). Re-check it yourself from the repo root: `make judge-rerun` (read-only, no keys: re-reads every listed transaction from the public RPC and re-derives the outcome table, MATCH or MISMATCH per row) and `make local-eval` (the same 160 invoices on a local anvil chain). | | |
+| **5. Check the evidence.** The [testnet eval](e2e/adversarial/TESTNET-EVAL.md) (its runs were staged by the eval script with fixed keys, not by a person): all 160 invoices of the attack set (30 genuine, 25 redirects, 25 prompt injections, 25 look-alikes, 25 model-edited lines, 10 edited amounts, 5 over the cap, 15 re-sent copies) run through the real pipeline on Aevum testnet with a rubber-stamp owner, the attacker's lines also sent straight to the contract, and three registry wallet swaps: 247 transactions, 0 wrong payments, every transaction linked ([first 16-invoice slice](e2e/adversarial/TESTNET-EVAL-16.md)). Re-check it yourself from the repo root: `make judge-rerun` (read-only, no keys: re-reads every listed transaction from the public RPC and re-derives the outcome table, MATCH or MISMATCH per row) and `make local-eval` (the same 160 invoices on a local anvil chain). | | |
 
 Invoice-redirection fraud ("we have new bank details, pay this account instead") is the most common way businesses lose money on payables, and AI agents now read the invoices. Clerk lets an AI do the reading and the paperwork while the rules, not the model, decide who gets paid:
 
@@ -36,6 +36,23 @@ flowchart LR
   F[Owner: approval page] -- execute / reject --> E
   E -- Paid events --> G[reconcile.py vs ledger]
 ```
+
+## Deployments (Aevum testnet, chain 44005)
+Every contract Clerk deployed, and the two it only reads. "Source verified" is what the explorer's API said when we read it (`GET /api/v2/smart-contracts/<address>`, 27 Nov 2026); `contracts/script/verify_explorer.sh` verified the first three, `contracts/script/verify_explorer_v3.sh` submits the rest.
+
+| Contract | Address | What it is for | Deploy tx | Source verified on the explorer |
+|---|---|---|---|---|
+| PayRun (v1) | [`0x2EE29a167CDDb964aAB9C899ea9Ae89847e3Da98`](https://explorer-test.qday.info/address/0x2EE29a167CDDb964aAB9C899ea9Ae89847e3Da98) | first testnet runs 1-3, paid from the approval page | [0x7f446fc8…](https://explorer-test.qday.info/tx/0x7f446fc86fffa0c8b733de3d8e333850ce8cb53059912bc74ed71cb9b04ac47f) | yes (22 Nov 2026) |
+| PayRunV2 | [`0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541`](https://explorer-test.qday.info/address/0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541) | payee-change hold; the approval page; owner = treasury = the Kernel account | [0x9f98fa47…](https://explorer-test.qday.info/tx/0x9f98fa4750cf78c4367b31e4cc886393a67820718802094c4b7eaaae44350ca5) | yes (22 Nov 2026) |
+| ClerkStagePolicy | [`0x4Ea16B1bb18005344FC77491F3809a47C74c01a4`](https://explorer-test.qday.info/address/0x4Ea16B1bb18005344FC77491F3809a47C74c01a4) | the clerk's key as a Kernel permission (stage only, capped) | [0x5f859864…](https://explorer-test.qday.info/tx/0x5f85986413ccc502693ab3359887f362b716bd91d31d8e24fbb8295882198cc8) | yes (22 Nov 2026) |
+| PayRunV2 (public sandbox) | [`0x8034c01ba98d882abd30118235d648183d3fae52`](https://explorer-test.qday.info/address/0x8034c01ba98d882abd30118235d648183d3fae52) | the attack sandbox since 25 Nov (capped: 0.10 tUSD8 allowance) | [0x43691c85…](https://explorer-test.qday.info/tx/0x43691c85f9da1c958c377c3c5dc5b05834c9ad137c75e8d2269993fd57242685) | no (as of 27 Nov 2026; the explorer shows the source of its identical twin PayRunV2 above) |
+| VendorRegistry | [`0x428981983c3aa672c27ea5a469e2d0e37dc646a1`](https://explorer-test.qday.info/address/0x428981983c3aa672c27ea5a469e2d0e37dc646a1) | our own vendor registry (ERC-8004 read interface), used by the PayRunV3 eval | [0xc057ec82…](https://explorer-test.qday.info/tx/0xc057ec82420f0d63e30c3a26bbb53c65dbb5819746e9f80f1d20e6aa8007db0d) | no (as of 27 Nov 2026; deploy input = repo build byte for byte, `script/verify_explorer_v3.sh --check`) |
+| PayRunV3 (eval, hostile extractor) | [`0x94161dd3ce5bebd21c599933e64c95c69dbc9f38`](https://explorer-test.qday.info/address/0x94161dd3ce5bebd21c599933e64c95c69dbc9f38) | vendor-signed invoices; 160-invoice eval, hostile column | [0x60a3ee8b…](https://explorer-test.qday.info/tx/0x60a3ee8bbdeba84699f80cd85de68ff489fa6ec791b510e244ea05f4d6545827) | no (as of 27 Nov 2026; same check) |
+| PayRunV3 (eval, rules extractor) | [`0x4b94960192749d5f06031dc3b588762f79a956b9`](https://explorer-test.qday.info/address/0x4b94960192749d5f06031dc3b588762f79a956b9) | vendor-signed invoices; 160-invoice eval, rules column | [0x2f1f0986…](https://explorer-test.qday.info/tx/0x2f1f0986d230515f0002ff0c264085c8bd6423cf895319b6d67018e80c1cd9c6) | no (as of 27 Nov 2026; same check) |
+| ERC-8004 identity registry (QDay's, read only) | [`0xF45E7f39Caba1d2055f613970575a7e7069636Be`](https://explorer-test.qday.info/address/0xF45E7f39Caba1d2055f613970575a7e7069636Be) | PayRun, PayRunV2 and the V2 sandbox read vendor wallets from it; not ours (below) | not ours | no (as of 27 Nov 2026; EIP-1967 proxy, implementation unverified) |
+| tUSD8 (QDay's test stablecoin) | [`0x456569838f1d43009A91ebA4263147Afd7233483`](https://explorer-test.qday.info/address/0x456569838f1d43009A91ebA4263147Afd7233483) | the payment token, 6 decimals | not ours | no (as of 27 Nov 2026; EIP-1967 proxy) |
+
+Third-party licenses: [NOTICE](NOTICE) and [Credits](#credits).
 
 ## What is in the repo
 | Path | What it does |
@@ -96,6 +113,7 @@ PayRunV2 on a local chain.
 - The owner **executes every staged run without reading it**, so the checks alone stand between the attacker and the money.
 - It runs twice: once with the deterministic extractor, and once with a **fully compromised extractor** that proposes the attacker's
   best line for every attack file.
+- Every run is staged by the eval script (fixed keys), not by a person; that includes the testnet runs ([TESTNET-EVAL.md](e2e/adversarial/TESTNET-EVAL.md), [TESTNET-EVAL-V3.md](e2e/adversarial/TESTNET-EVAL-V3.md)). The approval-page runs (Aevum testnet table) say how each was staged and approved.
 - Results are read from the chain afterwards. The full table and the corpus truth file are in
   [e2e/reports/adversarial-eval-2026-11-22.md](e2e/reports/adversarial-eval-2026-11-22.md).
 
@@ -231,7 +249,7 @@ The 160-invoice eval with every off-chain check bypassed (layer B), PayRunV2 vs 
 | Re-sent duplicate | 15 | 15 | 15 |
 | **All** | 130 | **95** | **130** |
 
-The PayRunV3 column is the Aevum testnet run of 27 Nov 2026 ([TESTNET-EVAL-V3.md](e2e/adversarial/TESTNET-EVAL-V3.md), 289 transactions, `make judge-rerun-v3`). The pipeline result is unchanged: 0 wrong payments, genuine 55/55 (rules) and 30/55
+The PayRunV3 column is the Aevum testnet run of 27 Nov 2026 ([TESTNET-EVAL-V3.md](e2e/adversarial/TESTNET-EVAL-V3.md), 289 transactions, staged by the eval script (fixed keys), not by a person; `make judge-rerun-v3`). The pipeline result is unchanged: 0 wrong payments, genuine 55/55 (rules) and 30/55
 (hostile). Each refused line is tried both with the best signature the attacker holds (the vendor's real one that came with a real
 vendor's invoice, its own key for a fake one) and without a signature; it counts as refused only if the contract refuses both.
 
@@ -270,10 +288,10 @@ Environment: `AEVUM_RPC` (default `https://rpc-test.qday.info`), `AEVUM_REGISTRY
 | Owner + treasury | Kernel v3.1 smart account [`0xc0bC2ab048dCa250417bEaFf6B68A222a4ae2d1C`](https://explorer-test.qday.info/address/0xc0bC2ab048dCa250417bEaFf6B68A222a4ae2d1C) |
 | Vendor identities (ERC-8004) | Acme Supplies #1698 ([0x79f51231…](https://explorer-test.qday.info/tx/0x79f5123103cb22251702eb7f27a1b5ec11e30625af100763935a9b8fd6215edb)), Globex Logistics #1699 ([0xc6375c16…](https://explorer-test.qday.info/tx/0xc6375c163fecb3a023697e778d45e4c3dc73208b7f6e8bb2bf6ef81609bde302)) |
 | Approve + session grant (one UserOperation) | [0x14fb17c7…](https://explorer-test.qday.info/tx/0x14fb17c7e92a0627a73002f591924cb0163de8d21598169eccee59d27ebcc642) |
-| Run 1 staged by the clerk's session key | [0xf73f54fa…](https://explorer-test.qday.info/tx/0xf73f54faa5ad8feed72acf43a53ecbec78dd6287756ee83224f6badc59e70a42): INV-1001 1.20 + G-77 0.80; redirect BLOCKED, look-alike HOLD, 6.50 over cap |
-| Run 1 paid by the owner (UserOperation) | [0xdde4f5aa…](https://explorer-test.qday.info/tx/0xdde4f5aaac0670d846bb41a28293cd81c37526087d428b917f1b39f83bf4c2f9): Acme +1.20, Globex +0.80 tUSD8; reconcile PAID_OK x2, INV-1002 UNPAID |
-| Run 2 paid from the approval page | stage [0x844395b6…](https://explorer-test.qday.info/tx/0x844395b6c1f59875246e2cac4988bbc3d3ac34523b68adf12140a33a201cb188), paid [0x1c6f44e3…](https://explorer-test.qday.info/tx/0x1c6f44e3f0fa120b0912da08973b44f6bad39588a66b4af082b424f0681468fc): INV-1004 0.30 to Acme |
-| Run 3 paid from the approval page | stage [0x24f2d55b…](https://explorer-test.qday.info/tx/0x24f2d55b9a0c2f2edf17c6215c6ff324336ebb50c7c58b74b2012885ae423b33), paid [0xf01567cd…](https://explorer-test.qday.info/tx/0xf01567cde9d18e6d06de1c473de937b41a9ec6c8bdb6cc8b25452f2df4e83303): INV-1006 0.25 to Acme + G-79 0.20 to Globex; a prompt-injected redirect invoice stopped, a look-alike vendor held |
+| Run 1 staged by the clerk's session key (the clerk pipeline run by `e2e/run_testnet.sh`, fixed test keys) | [0xf73f54fa…](https://explorer-test.qday.info/tx/0xf73f54faa5ad8feed72acf43a53ecbec78dd6287756ee83224f6badc59e70a42): INV-1001 1.20 + G-77 0.80; redirect BLOCKED, look-alike HOLD, 6.50 over cap |
+| Run 1 paid by the owner (UserOperation sent by `e2e/run_testnet.sh`, not from the page) | [0xdde4f5aa…](https://explorer-test.qday.info/tx/0xdde4f5aaac0670d846bb41a28293cd81c37526087d428b917f1b39f83bf4c2f9): Acme +1.20, Globex +0.80 tUSD8; reconcile PAID_OK x2, INV-1002 UNPAID |
+| Run 2 paid from the approval page (staged by the clerk pipeline script; the approval was sent from the page through a testnet-only signer while recording the demo film) | stage [0x844395b6…](https://explorer-test.qday.info/tx/0x844395b6c1f59875246e2cac4988bbc3d3ac34523b68adf12140a33a201cb188), paid [0x1c6f44e3…](https://explorer-test.qday.info/tx/0x1c6f44e3f0fa120b0912da08973b44f6bad39588a66b4af082b424f0681468fc): INV-1004 0.30 to Acme |
+| Run 3 paid from the approval page (staged by the clerk pipeline script; the approval was sent from the page through a testnet-only signer while recording the demo film) | stage [0x24f2d55b…](https://explorer-test.qday.info/tx/0x24f2d55b9a0c2f2edf17c6215c6ff324336ebb50c7c58b74b2012885ae423b33), paid [0xf01567cd…](https://explorer-test.qday.info/tx/0xf01567cde9d18e6d06de1c473de937b41a9ec6c8bdb6cc8b25452f2df4e83303): INV-1006 0.25 to Acme + G-79 0.20 to Globex; a prompt-injected redirect invoice stopped, a look-alike vendor held |
 | PayRunV2 (payee-change hold) | [`0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541`](https://explorer-test.qday.info/address/0x89d14Bf88D8dF1AB8b0F520414fbbC9e1d69F541) (deploy [0x9f98fa47…](https://explorer-test.qday.info/tx/0x9f98fa4750cf78c4367b31e4cc886393a67820718802094c4b7eaaae44350ca5), block 3682602), owner and treasury = the same Kernel account |
 | Hold started on a wallet V2 had never seen | [0xc8472b00…](https://explorer-test.qday.info/tx/0xc8472b00a63946569954436dff3a0099b28a4e24a32b6e89e61430080b107a07): `observePayee(1698)` -> PayeeChanged (none -> Acme's wallet) + HoldStarted (24 h) |
 | Owner confirms the payee early (UserOperation) | [0x1353239c…](https://explorer-test.qday.info/tx/0x1353239ca2467412fc843090be685e608af91b1967975fcb1ebf7381b3813316): PayeeConfirmed + HoldReleased (early) |
@@ -341,4 +359,4 @@ Third-party work this project uses, with its license:
 - **Cloudflare Turnstile** on the hosted demos (Cloudflare's terms of service).
 - Network facts from the Aevum Starter Kit docs (MIT, PQA Labs).
 
-Clerk itself is MIT licensed (`LICENSE`).
+The same list, with copyright lines, is in [NOTICE](NOTICE); PayRunV3 and VendorRegistry add no third-party code. Clerk itself is MIT licensed (`LICENSE`).

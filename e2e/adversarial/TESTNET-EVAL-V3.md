@@ -1,5 +1,7 @@
 # Clerk adversarial eval: Aevum TESTNET run
 
+**Staged by the eval script (fixed keys), not by a person.** Every run and transaction in this report was staged, executed and swapped by `sandbox/testnet_eval.mjs` with fixed test keys; the "owner" is that script acting as a rubber stamp. The approval page's runs are listed separately in the README's Aevum testnet table, with how each was staged and approved.
+
 **Check it yourself (one command each, from the repo root):**
 - `make judge-rerun`: read-only, no keys. Re-reads every transaction below from the public RPC (https://rpc-test.qday.info), checks sender, status, block and gas, compares both PayRunV2s with the repo's compiled code, regenerates the corpus from its seed and re-derives the outcome table from the Paid events; prints MATCH or MISMATCH per row (Node 18+, Python 3; Foundry optional, for the bytecode check). Same as `cd sandbox && npm ci --omit=dev && npm run judge:testnet-eval`.
 - `make local-eval`: the same 160-invoice attack set, unscaled, on a local anvil chain (Foundry; a few minutes); writes `e2e/work/adversarial/report.md` ([local report](../reports/adversarial-eval-2026-11-22.md)).
