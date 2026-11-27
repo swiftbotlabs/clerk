@@ -1,0 +1,349 @@
+{
+ "attempts": {
+  "payee_swap": {
+   "ok": true,
+   "id": 3,
+   "n": 1,
+   "outcome": "refused",
+   "expect": "PayeeNotRegistered",
+   "error": "PayeeNotRegistered",
+   "txs": [
+    {
+     "step": "clerk stages the line anyway",
+     "from": "clerk",
+     "hash": "0x99eaf640d2641083c05934e9abeb89776b59c444cc2a64ebcd105e21506373e5",
+     "status": "reverted",
+     "error": "PayeeNotRegistered"
+    }
+   ]
+  },
+  "lookalike": {
+   "ok": true,
+   "id": 4,
+   "n": 2,
+   "outcome": "refused",
+   "expect": "PayeeNotRegistered",
+   "error": "PayeeNotRegistered",
+   "txs": [
+    {
+     "step": "clerk stages the line anyway",
+     "from": "clerk",
+     "hash": "0x1c0afa2f3ef77f4aa38fc0b4af938e96cc348dfcdebf9c4d4fa24d929bac1ba7",
+     "status": "reverted",
+     "error": "PayeeNotRegistered"
+    }
+   ]
+  },
+  "injection": {
+   "ok": true,
+   "id": 5,
+   "n": 3,
+   "outcome": "refused",
+   "expect": "PayeeNotRegistered",
+   "error": "PayeeNotRegistered",
+   "txs": [
+    {
+     "step": "clerk stages the line anyway",
+     "from": "clerk",
+     "hash": "0x1976cfdaba92f82341acbe3af141845dc40dca92871bf46cfde97d822f1fff3f",
+     "status": "reverted",
+     "error": "PayeeNotRegistered"
+    }
+   ]
+  },
+  "over_run_cap": {
+   "ok": true,
+   "id": 6,
+   "n": 4,
+   "outcome": "refused",
+   "expect": "RunCapExceeded",
+   "error": "RunCapExceeded",
+   "txs": [
+    {
+     "step": "stage 0.11 tUSD8 (run cap 0.10)",
+     "from": "clerk",
+     "hash": "0x1dcab1edcf0d097e50b88fc7845db83c568ea13425bc15e68ef93a8bb5e9b62c",
+     "status": "reverted",
+     "error": "RunCapExceeded"
+    }
+   ]
+  },
+  "split_day_cap": {
+   "ok": true,
+   "id": 7,
+   "n": 5,
+   "outcome": "refused",
+   "expect": "DayCapExceeded",
+   "error": "DayCapExceeded",
+   "txs": [
+    {
+     "step": "first half: stage 0.06 (accepted, under the caps)",
+     "from": "daycap",
+     "hash": "0xed4c146c342bc03c0d14577226f90ce86f9be5c740e93118af316f2b8b6c1ec4",
+     "status": "success",
+     "error": null
+    },
+    {
+     "step": "second half: stage 0.06 more the same day (day cap 0.10)",
+     "from": "daycap",
+     "hash": "0xd7ce672664cddc4ac99eca67d8ee1461e77bd21aa6f63c658129c1422902c4a6",
+     "status": "reverted",
+     "error": "DayCapExceeded"
+    }
+   ]
+  },
+  "resend_paid": {
+   "ok": true,
+   "id": 8,
+   "n": 6,
+   "outcome": "refused",
+   "expect": "AlreadyPaid",
+   "error": "AlreadyPaid",
+   "txs": [
+    {
+     "step": "re-stage the invoice paid at setup",
+     "from": "clerk",
+     "hash": "0x9eeeafecfd12ca2ff87dd93af07664192808fd857dbf701bfd48c9a978d35b62",
+     "status": "reverted",
+     "error": "AlreadyPaid"
+    }
+   ]
+  },
+  "clerk_executes": {
+   "ok": true,
+   "id": 9,
+   "n": 7,
+   "outcome": "refused",
+   "expect": "NotOwner",
+   "error": "NotOwner",
+   "txs": [
+    {
+     "step": "clerk key calls execute(run 1)",
+     "from": "clerk",
+     "hash": "0xdceb482e48ba3a309589ce9093e8168638f99f56d8c4c377adb264388229b538",
+     "status": "reverted",
+     "error": "NotOwner"
+    }
+   ]
+  },
+  "revoked_key": {
+   "ok": true,
+   "id": 10,
+   "n": 8,
+   "outcome": "refused",
+   "expect": "SessionRevokedErr",
+   "error": "SessionRevokedErr",
+   "txs": [
+    {
+     "step": "revoked key stages a valid line",
+     "from": "revoked",
+     "hash": "0x41042c05f26aa47d152e7211822d6bdbb021139f45274913aa777865a6583e6f",
+     "status": "reverted",
+     "error": "SessionRevokedErr"
+    }
+   ]
+  },
+  "expired_key": {
+   "ok": true,
+   "id": 11,
+   "n": 9,
+   "outcome": "refused",
+   "expect": "SessionExpired",
+   "error": "SessionExpired",
+   "txs": [
+    {
+     "step": "expired key stages a valid line",
+     "from": "expired",
+     "hash": "0x35b31c7bf893da8b373126ee6b25c4502f1907f7fd58d171abc614a9cf5eefad",
+     "status": "reverted",
+     "error": "SessionExpired"
+    }
+   ]
+  },
+  "stranger_key": {
+   "ok": true,
+   "id": 12,
+   "n": 10,
+   "outcome": "refused",
+   "expect": "NoSession",
+   "error": "NoSession",
+   "txs": [
+    {
+     "step": "key with no session stages a valid line",
+     "from": "stranger",
+     "hash": "0x087ebdcb3a6c7623a1738bd4602fa40b3747296c08b4c24066ee3421f5989e59",
+     "status": "reverted",
+     "error": "NoSession"
+    }
+   ]
+  },
+  "hijack_after_staging": {
+   "ok": true,
+   "id": 13,
+   "n": 11,
+   "outcome": "refused",
+   "expect": "PaymentBlocked:3",
+   "error": "PaymentBlocked(reason 3: payee changed after staging: run refused and closed)",
+   "txs": [
+    {
+     "step": "clerk stages an invoice to the vendor's registered wallet",
+     "from": "clerk",
+     "hash": "0x8f016768e1b1bdd203952d94b7a2499c08c09af5e05e4da194495ecf78e14388",
+     "status": "success",
+     "error": null
+    },
+    {
+     "step": "the vendor's registered wallet is re-pointed (hijack)",
+     "from": "registrar",
+     "hash": "0x5f3fa712da72ff9fd5567a4b003166f35d0d864144d6afceb012d8becf5821ff",
+     "status": "success",
+     "error": null
+    },
+    {
+     "step": "owner tries to pay the run",
+     "from": "owner",
+     "hash": "0x1a87891064aa9200c44fb6260a00c67576f2076d7949dc79ce821fa6a5d0f43b",
+     "status": "success",
+     "error": "PaymentBlocked(reason 3: payee changed after staging: run refused and closed)"
+    }
+   ]
+  },
+  "new_payee_unconfirmed": {
+   "ok": true,
+   "id": 14,
+   "n": 12,
+   "outcome": "refused",
+   "expect": "PaymentBlocked:1",
+   "error": "PaymentBlocked(reason 1: payee still on hold)",
+   "txs": [
+    {
+     "step": "the vendor registers a brand-new wallet",
+     "from": "registrar",
+     "hash": "0xab42e567eeecf7f54f97476e70412411ae5f11a5c8844c451e5dadb6039708a6",
+     "status": "success",
+     "error": null
+    },
+    {
+     "step": "clerk stages an invoice to the new wallet",
+     "from": "clerk",
+     "hash": "0x232cb627c8f711f395890429e92ef87f8ad5f428b3594161b5b9880acd9cb393",
+     "status": "success",
+     "error": null
+    },
+    {
+     "step": "owner tries to pay the run",
+     "from": "owner",
+     "hash": "0x981fdb1abfca9dc4b382a9cd42ff517eabe519c063594ef4dc293db7f0f1450e",
+     "status": "success",
+     "error": "PaymentBlocked(reason 1: payee still on hold)"
+    }
+   ]
+  },
+  "duplicate_in_run": {
+   "ok": true,
+   "id": 15,
+   "n": 13,
+   "outcome": "refused",
+   "expect": "AlreadyStaged",
+   "error": "AlreadyStaged",
+   "txs": [
+    {
+     "step": "one run lists the same invoice twice",
+     "from": "clerk",
+     "hash": "0xa1ff25b1cf9ef583408b85c9947a0a5a9e1e69c6c663e9e98806a27077c7d465",
+     "status": "reverted",
+     "error": "AlreadyStaged"
+    }
+   ]
+  },
+  "zero_amount": {
+   "ok": true,
+   "id": 16,
+   "n": 14,
+   "outcome": "refused",
+   "expect": "ZeroAmount",
+   "error": "ZeroAmount",
+   "txs": [
+    {
+     "step": "stage a 0.00 line",
+     "from": "clerk",
+     "hash": "0x7f48a2051e9e773de0458b89deaab656999177c4ca4b6ce215cd04ca0ac1f65d",
+     "status": "reverted",
+     "error": "ZeroAmount"
+    }
+   ]
+  },
+  "unsigned_invoice": {
+   "ok": true,
+   "id": 17,
+   "n": 15,
+   "outcome": "refused",
+   "expect": "VendorSignatureRequired",
+   "error": "VendorSignatureRequired",
+   "txs": [
+    {
+     "step": "clerk stages a correct Acme line with no signature",
+     "from": "clerk",
+     "hash": "0xd348244a66a01b62fc688943271e785dbc172af1a53f74e2cad09ae9c28168e2",
+     "status": "reverted",
+     "error": "VendorSignatureRequired"
+    }
+   ]
+  },
+  "forged_signature": {
+   "ok": true,
+   "id": 18,
+   "n": 16,
+   "outcome": "refused",
+   "expect": "BadVendorSignature",
+   "error": "BadVendorSignature",
+   "txs": [
+    {
+     "step": "clerk stages it with a signature made by another key",
+     "from": "clerk",
+     "hash": "0xc4e9ce4e2516b0ddeb660673b6c3f0d3e2f7717b39f0672e9617b4e068ce5fd3",
+     "status": "reverted",
+     "error": "BadVendorSignature"
+    }
+   ]
+  },
+  "edited_after_signing": {
+   "ok": true,
+   "id": 19,
+   "n": 17,
+   "outcome": "refused",
+   "expect": "BadVendorSignature",
+   "error": "BadVendorSignature",
+   "txs": [
+    {
+     "step": "clerk stages 0.05 with Acme's signature over 0.02",
+     "from": "clerk",
+     "hash": "0xd8fc07f336fa3730f38712a85e0a10118d0c5c48460be322ad5de29ae5690869",
+     "status": "reverted",
+     "error": "BadVendorSignature"
+    }
+   ]
+  },
+  "genuine": {
+   "ok": true,
+   "id": 20,
+   "n": 0,
+   "outcome": "accepted",
+   "expect": "Staged",
+   "error": null,
+   "txs": [
+    {
+     "step": "stage the genuine invoice",
+     "from": "clerk",
+     "hash": "0xcbb27f92831e6b8f50f97a478dcf3f1857f11336eb13035a599fcd099200a7de",
+     "status": "success",
+     "error": null
+    }
+   ]
+  }
+ },
+ "base": "https://clerk-sandbox.swiftbotlab.workers.dev",
+ "started": "2026-11-27T22:05:30.230Z",
+ "payrun": "0x09c26cfd140da0c5d6cf226a4c1e1fb208211a2c",
+ "finished": "2026-11-27T22:07:07.521Z"
+}

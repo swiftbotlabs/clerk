@@ -153,5 +153,16 @@
   "vendor_acme": "0x1286FCFb3FB415C5013C3B6daeFc739a83661CF0",
   "vendor_hijack": "0x2ca81eDEC22801F0d0eA4388CA7E94D2efECe28D",
   "vendor_new": "0xC4A65962669bC9C18010E3b7a2B97930D80a3A91"
+ },
+ "genuine_paid": {
+  "attempt": 20,
+  "run": "5",
+  "stage_tx": "0xcbb27f92831e6b8f50f97a478dcf3f1857f11336eb13035a599fcd099200a7de",
+  "paid_tx": "0xc614ae0095f03e9694454efbd7bde647c2cb6a88d3ae0c228a41d750e6d6c3f8",
+  "amount": "20000",
+  "payee": "0x1286FCFb3FB415C5013C3B6daeFc739a83661CF0",
+  "confirmed": true,
+  "block": "4293206",
+  "paid_at": "2026-11-27T22:07:17.000Z"
  }
 }
