@@ -4,6 +4,28 @@
  "payrun_v3_block": "4281230",
  "registry": "0x428981983c3aa672c27ea5a469e2d0e37dc646a1",
  "setup_tx": "0xb3dff90e4076584e18e23ce804c12fefda45eea4cc2df0baa249fb04eb595048",
- "stage_run": "1",
- "stage_tx": "0x1709190405888ac6645c5ca0865806423ffda2b2ecf65f3877227e0449bf255e"
+ "stage_run": "2",
+ "stage_tx": "0x0eb9eb546ba4a5ebb6c9b6f4e93abb67bdbbe955ec818ac517606f74894ad63e",
+ "refreshes": [
+  {
+   "open": "2026-11-27T20:13Z",
+   "reject_tx": "0x10bdd1aa06acd6547f7c934f271c561b524a2508ef7fb8de156d7bbcda0cdde8",
+   "suspend_tx": "0x0fc7083a285e05c0850191071a35d91256f0061489cdd29e4552da41536d3967",
+   "observe_tx": "0xf0445420d7f0b163b78b9aa30e506541671e6694f778c9d5d930d0dd4320b2a7",
+   "reinstate_tx": "0xfaa1d87475d252100508e5deabe523724d45ae1931bf9f26c121b0d7e714f1ad",
+   "fund_tx": "0xcbf12a8187d9e040b6bb06433ff2fefcb058ffa80f88eb4ae1256d41d657a793",
+   "run": 2,
+   "stage_tx": "0x0eb9eb546ba4a5ebb6c9b6f4e93abb67bdbbe955ec818ac517606f74894ad63e"
+  }
+ ],
+ "last_refresh": {
+  "open": "2026-11-27T20:13Z",
+  "reject_tx": "0x10bdd1aa06acd6547f7c934f271c561b524a2508ef7fb8de156d7bbcda0cdde8",
+  "suspend_tx": "0x0fc7083a285e05c0850191071a35d91256f0061489cdd29e4552da41536d3967",
+  "observe_tx": "0xf0445420d7f0b163b78b9aa30e506541671e6694f778c9d5d930d0dd4320b2a7",
+  "reinstate_tx": "0xfaa1d87475d252100508e5deabe523724d45ae1931bf9f26c121b0d7e714f1ad",
+  "fund_tx": "0xcbf12a8187d9e040b6bb06433ff2fefcb058ffa80f88eb4ae1256d41d657a793",
+  "run": 2,
+  "stage_tx": "0x0eb9eb546ba4a5ebb6c9b6f4e93abb67bdbbe955ec818ac517606f74894ad63e"
+ }
 }

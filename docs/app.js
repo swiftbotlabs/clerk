@@ -13,13 +13,14 @@ const BLOCKED_TOPIC = '0xeccfe563df0552cce6bb5602228af8212d6b0abec81deed0180430d
 const RUN_TTL = 7 * 86400;   // both PayRun versions: a run staged longer ago than this can't be executed (it can still be rejected)
 const when = (t) => new Date(Number(t) * 1000).toLocaleString('en', { dateStyle: 'medium', timeStyle: 'short' });
 // Why PayRunV2 won't pay a run yet. Read from the contract, never from the report.
-async function holdOf(payrun, id, items) {
+async function holdOf(payrun, id, items, stagedAt = 0) {
   let r; try { r = await pub().readContract({ address: payrun, abi: ABI, functionName: 'canExecute', args: [BigInt(id)] }); } catch { return null; }
   const [ok, line, reason, releaseAt] = r; if (ok || ![1, 2, 3].includes(Number(reason))) return null;
   const l = await pub().readContract({ address: payrun, abi: ABI, functionName: 'lineOf', args: [BigInt(id), line] });
   const agent = String(l.payeeAgentId), payee = l.payee;
   const name = items.find((i) => String(i.agent_id) === agent)?.registered_name || 'agent #' + agent;
-  return { reason: Number(reason), agent, payee, name, text: holdText(Number(reason), name, payee, releaseAt) };
+  const until = [1, 2].includes(Number(reason)) && stagedAt ? ` This run can be paid until ${esc(when(stagedAt + RUN_TTL))}; after that it expires unpaid.` : '';
+  return { reason: Number(reason), agent, payee, name, text: holdText(Number(reason), name, payee, releaseAt) + until };
 }
 function holdText(reason, name, payee, releaseAt) {
   return reason === 1
@@ -124,13 +125,13 @@ async function render() {
     let st = 0, stagedAt = 0;
     try { const r = await pub().readContract({ address: payrun, abi: ABI, functionName: 'runs', args: [BigInt(id)] }); st = Number(r[0]); stagedAt = Number(r[2]); } catch {}
     const expired = st === 1 && now > stagedAt + RUN_TTL;
-    const hold = st === 1 && !expired ? await holdOf(payrun, id, its) : null;
+    const hold = st === 1 && !expired ? await holdOf(payrun, id, its, stagedAt) : null;
     let label = STATUS[st] || 'Unknown', acts = '';
     const can = st === 1 && trusted(payrun);
     const v2 = ['PayRunV2', 'PayRunV3'].includes(cname(payrun)) && trusted(payrun);   // both have the payee-change hold
     const simBtn = (kind, label) => (v2 ? btn('sim', k, payrun, id, label, '', ` data-kind="${kind}"`) : '');
     if (st === 0) c.unread++;
-    else if (expired) { c.clear++; label = 'Expired: staged more than 7 days ago, so it can no longer be paid'; if (can) acts = btn('reject', k, payrun, id, 'Reject'); }
+    else if (expired) { if (!(V3_PAGE && cname(payrun) !== 'PayRunV3')) c.clear++; label = 'Expired, not paid: staged more than 7 days ago, so it can no longer be paid'; if (can) acts = btn('reject', k, payrun, id, 'Reject'); }
     else if (hold && hold.reason === 3) { c.clear++; label = 'Can\'t be paid: the payee changed'; if (can) acts = btn('reject', k, payrun, id, 'Reject'); }
     else if (hold) {
       c.held++; label = 'Held: confirm the payee or reject';

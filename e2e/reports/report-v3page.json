@@ -30,11 +30,41 @@
    "run_id": 1,
    "due": 20261220,
    "signature": "0x6c1b1b3bd6d82b7d5217ddd4c5ec86d02b50d7c0f9263f6700a7898b7b1a01373bf5fb0ef1704d5ead6d7ece6e94f716cce6bd5096d25e382cfc6e441d9f28221c"
+  },
+  {
+   "file": "inv-acme-3002.txt",
+   "invoice_hash": "0x3b338a74bd405ac8f9ecf0586b5209ee0b55eeab328d8ee38848679bd52ae0c8",
+   "proposed": {
+    "vendor": "Acme Supplies Ltd",
+    "wallet": "0xF65bCdfAE88b6C69580aEEA9944248ac23355dB9",
+    "amount": "0.05",
+    "currency": "tUSD8",
+    "reference": "INV-3002",
+    "due_date": "2026-12-18"
+   },
+   "decision": "PAYABLE",
+   "cop": "MATCH",
+   "registered_name": "Acme Supplies Ltd",
+   "agent_id": 1,
+   "reasons": [],
+   "warnings": [],
+   "units": 50000,
+   "skip": null,
+   "evidence": {
+    "vendor": "ACME SUPPLIES LTD",
+    "amount": "Item: 1 x label printer ribbon, 0.05",
+    "reference": "Invoice No: INV-3002",
+    "due_date": "Due date: 2026-12-18",
+    "wallet": "Pay to: 0xF65bCdfAE88b6C69580aEEA9944248ac23355dB9"
+   },
+   "run_id": 2,
+   "due": 20261218,
+   "signature": "0x806d4667f8ea46103ad4e6e793c8e7323187aed38b5d64f759deff03b245d35d325607300b438312795276f1967b8ab67a55798c6923a991946b404def152a581c"
   }
  ],
  "headroom": {
   "perRun": 100000,
-  "today": 200000
+  "today": 150000
  },
  "runs": [
   {
@@ -44,6 +74,14 @@
    "status": "staged",
    "run_id": 1,
    "tx": "0x1709190405888ac6645c5ca0865806423ffda2b2ecf65f3877227e0449bf255e"
+  },
+  {
+   "files": [
+    "inv-acme-3002.txt"
+   ],
+   "status": "staged",
+   "run_id": 2,
+   "tx": "0x0eb9eb546ba4a5ebb6c9b6f4e93abb67bdbbe955ec818ac517606f74894ad63e"
   }
  ]
 }
