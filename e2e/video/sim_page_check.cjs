@@ -5,11 +5,15 @@
 //   - every RPC request is a read (eth_call / getBlock / chainId ...); NONE is a send or a wallet method; state overrides are used
 //   - no page errors, no dialogs; screenshots at 390 px and 1280 px into OUT
 // Usage: NODE_PATH=/data/motion/node_modules CHROME_BIN=/usr/bin/google-chrome OUT=dir PORT=8098 node e2e/video/sim_page_check.cjs
+// EXPECT_PAYRUN=0x… EXPECT_NAME=PayRunV3 (r7b): the walkthrough must name that contract and every probe eth_call must target it.
 const { chromium } = require('playwright');
 const OUT = process.env.OUT || '.', PORT = process.env.PORT || '8098';
 const URL = process.env.PAGE_URL || `http://127.0.0.1:${PORT}/index.html`;   // PAGE_URL: e.g. the live page (reads only)
 const READS = new Set(['eth_call', 'eth_getBlockByNumber', 'eth_chainId', 'eth_blockNumber', 'eth_getCode', 'eth_getLogs', 'eth_getBalance', 'eth_getTransactionReceipt']);
 let failed = 0;
+const EXPECT = (process.env.EXPECT_PAYRUN || '').toLowerCase(), EXPECT_NAME = process.env.EXPECT_NAME || '';
+if (EXPECT && !/^0x[0-9a-f]{40}$/.test(EXPECT)) throw new Error('EXPECT_PAYRUN?');
+const probeData = [];
 const fail = (m) => { console.log('SIM FAIL: ' + m); failed++; };
 (async () => {
   const b = await chromium.launch(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {});
@@ -27,7 +31,7 @@ const fail = (m) => { console.log('SIM FAIL: ' + m); failed++; };
         const body = JSON.parse(r.postData() || 'null');
         for (const q of Array.isArray(body) ? body : [body]) {
           methods.push(q.method);
-          if (q.method === 'eth_call' && q.params?.[2] && Object.keys(q.params[2]).length) overrides++;
+          if (q.method === 'eth_call' && q.params?.[2] && Object.keys(q.params[2]).length) { overrides++; probeData.push(String(q.params[0]?.data || q.params[0]?.input || '').toLowerCase()); }
         }
       } catch { methods.push('UNPARSEABLE'); }
     });
@@ -37,7 +41,7 @@ const fail = (m) => { console.log('SIM FAIL: ' + m); failed++; };
     if (await p.evaluate(() => typeof window.ethereum !== 'undefined')) fail('a wallet is present: this check must run without one');
 
     // ---- the walkthrough
-    const want = [/Staged as run \d+\..*Held: the payee is new or just changed/s, /Not paid: the contract blocked it\. The treasury still holds/,
+    const want = [/Staged as (?:PayRunV\d )?run \d+\..*Held: the payee is new or just changed/s, /Not paid: the contract blocked it\. The treasury still holds/,
       /The contract accepts the confirmation \(only the owner can give it\)\. The run can now be paid\./, /Paid 0\.01 tUSD8 to .*registered wallet\. Treasury [\d.]+ tUSD8 → [\d.]+ tUSD8\. Run \d+: Paid\./s];
     for (let i = 1; i <= 4; i++) {
       await p.click('#simNext');
@@ -51,7 +55,20 @@ const fail = (m) => { console.log('SIM FAIL: ' + m); failed++; };
         if (!m || num(m[1]) - num(m[2]) !== 1) fail(`step 4: treasury change is not exactly 0.01: ${JSON.stringify(lis[3])}`);
       }
     }
+    if (EXPECT) {   // r7b: the walkthrough runs on (and says) the expected contract
+      const label = await p.$eval('#simContract', (e) => e.innerText);
+      if (!label.startsWith(EXPECT_NAME + ' ' + EXPECT.slice(0, 6))) fail(`walkthrough intro names "${label}", expected ${EXPECT_NAME} ${EXPECT.slice(0, 6)}…`);
+      const lis = await p.$$eval('#simSteps li', (x) => x.map((e) => e.innerText));
+      if (!new RegExp(`Staged as ${EXPECT_NAME} run`).test(lis[0] || '')) fail('step 1 does not name ' + EXPECT_NAME + ': ' + lis[0]);
+      const walk = probeData.filter((d) => d.startsWith('0x'));
+      if (!walk.length) fail('no probe calls captured');
+      const wrong = walk.filter((d) => !d.includes(EXPECT.slice(2)));
+      console.log(`probe calls ${walk.length}, targeting ${EXPECT_NAME}: ${walk.length - wrong.length} (per-run sims may target other PayRuns later)`);
+      if (wrong.length) fail(`${wrong.length} walkthrough probe call(s) do not target ${EXPECT}`);
+      probeData.length = 0;
+    }
     const note = await p.$eval('#simNote', (e) => e.innerText);
+    if (EXPECT_NAME && !note.includes('live ' + EXPECT_NAME)) fail('final note does not name ' + EXPECT_NAME + ': ' + note);
     if (!/nothing was signed or sent/.test(note)) fail('final note does not say nothing was sent: ' + note);
     await p.screenshot({ path: `${OUT}/sim-desktop.png`, fullPage: false, clip: await p.$eval('#sim', (e) => { const r = e.getBoundingClientRect(); return { x: 0, y: r.top + window.scrollY - 8, width: 1280, height: Math.min(900, r.height + 16) }; }) });
 

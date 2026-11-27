@@ -205,7 +205,7 @@ def main(argv: list[str]) -> int:
         held_html = f'<div class="slip"><div class="held" role="alert">{hold["text"]}</div></div>' if hold else ""
         rank = (0 if hold and hold["reason"] != 3 else 2 if expired or hold else 1) if st == 1 else 3 if st == 0 else 4
         parts.append((rank, f'<article class="run {"done" if st == 2 else ""}" data-run="{rid}"><div class="runhead"><div>'
-                     f'<div class="status">{esc(NAMES.get(payrun.lower(), short(payrun)))} run {rid}: {esc(label)}</div>'
+                     f'<div class="status">{esc(NAMES.get(payrun.lower(), short(payrun)))}{" (earlier contract, history)" if v3page() and NAMES.get(payrun.lower()) != "PayRunV3" else ""} run {rid}: {esc(label)}</div>'
                      f'<div class="total">{money(total)} <small>· {plural(len(its), "invoice", "invoices")}</small></div></div>'
                      f'<div class="actions"></div></div>{held_html}{"".join(slip(i, hold) for i in its)}</article>'))
 

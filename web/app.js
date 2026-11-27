@@ -140,7 +140,7 @@ async function render() {
     if (st === 1 && !expired && !(hold && hold.reason === 3)) acts += simBtn(hold ? 'held' : 'pay', hold ? 'Simulate: confirm, then pay' : 'Simulate approving (no wallet)');
     const total = its.reduce((s, i) => s + BigInt(i.units), 0n);
     const rank = st === 1 ? (hold && hold.reason !== 3 ? 0 : expired || hold ? 2 : 1) : st === 0 ? 3 : 4;   // what needs the owner comes first
-    parts.push([rank, `<article class="run ${st === 2 ? 'done' : ''}" data-key="${k}" data-run="${id}"><div class="runhead"><div><div class="status">${esc(cname(payrun))} run ${id}: ${esc(label)}</div>
+    parts.push([rank, `<article class="run ${st === 2 ? 'done' : ''}" data-key="${k}" data-run="${id}"><div class="runhead"><div><div class="status">${esc(cname(payrun))}${V3_PAGE && cname(payrun) !== 'PayRunV3' ? ' (earlier contract, history)' : ''} run ${id}: ${esc(label)}</div>
       <div class="total">${money(total)} <small>· ${plural(its.length, 'invoice', 'invoices')}</small></div></div>
       <div class="actions">${acts}</div></div>
       ${hold ? `<div class="slip"><div class="held" role="alert">${hold.text}</div></div>` : ''}${its.map((it) => slip(it, hold)).join('')}<div class="slip status" id="tx-${k}" aria-live="polite" ${notes[k] ? '' : 'hidden'}>${notes[k] || ''}</div></article>`]);
@@ -275,7 +275,7 @@ async function simNext() {
     const r = await walkthrough(pub(), payrun, upto, simCache);
     simCache = { ctx: r.ctx, vendor: r.vendor };
     const v = r.vendor, s = r.steps, items = [];
-    if (s[0]) items.push(s[0].ok ? `<strong>The clerk stages ${esc(v.name)}'s first invoice</strong> (agent #${esc(v.agentId)}): ${tusd(r.amount)} to its registered wallet ${esc(short(v.wallet))}. Staged as run ${esc(r.runId)}.`
+    if (s[0]) items.push(s[0].ok ? `<strong>The clerk stages ${esc(v.name)}'s first invoice</strong> (agent #${esc(v.agentId)}): ${tusd(r.amount)} to its registered wallet ${esc(short(v.wallet))}. Staged as ${esc(cname(payrun))} run ${esc(r.runId)}.`
       + `<span class="r">${s[0].held ? 'Held: ' + esc(BLOCK_REASON[s[0].reason] || 'on hold') + '.' : 'Not held: this vendor is already trusted.'}</span>` : esc(s[0].text));
     if (s[1]) items.push(`<strong>The owner presses Approve and pay without checking.</strong><span class="r">${s[1].paid ? 'Paid.' : `Not paid: the contract blocked it. The treasury still holds ${tusd(s[1].treasury)}; the vendor's wallet is unchanged.`}</span>`);
     if (s[2]) items.push(`<strong>The owner calls the vendor on a number they already had, then confirms the payee.</strong><span class="r">${s[2].ok ? `The contract accepts the confirmation (only the owner can give it). The run ${s[2].canAfter ? 'can now be paid' : 'still can\'t be paid'}.` : 'Refused: ' + esc(s[2].why)}</span>`);
@@ -283,9 +283,18 @@ async function simNext() {
     $('#simSteps').innerHTML = items.map((x) => `<li>${SIM_TAG}${x}</li>`).join('');
     simUpto = upto;
     if (simUpto < 4) { btnN.textContent = 'Next: ' + SIM_STEPS[simUpto]; $('#simNote').textContent = ''; }
-    else { btnN.textContent = 'Run it again'; simUpto = 0; simCache = {}; $('#simNote').textContent = 'All of this was computed by the live contract and then thrown away: nothing was signed or sent. To do it for real, the owner connects the wallet that signs for its smart account.'; }
+    else { btnN.textContent = 'Run it again'; simUpto = 0; simCache = {}; $('#simNote').textContent = 'All of this was computed by the live ' + cname(payrun) + ' and then thrown away: nothing was signed or sent. To do it for real, the owner connects the wallet that signs for its smart account.'; }
   } catch (e) { $('#simNote').textContent = 'Could not run the simulation: ' + (e.shortMessage || e.message || e); }
   btnN.disabled = false;
 }
+// Name the contract the walkthrough really runs on (PayRunV3 + our VendorRegistry once the page pins one), with explorer links.
+async function simLabel() {
+  const payrun = simPayrun(); const el = $('#simContract'); if (!payrun || !el) return;
+  const ex = CHAINS[chainId]?.explorer, link = (a, t) => ex ? `<a href="${ex}/address/${esc(a)}">${esc(t)}</a>` : esc(t);
+  let reg = ''; try { reg = await pub().readContract({ address: payrun, abi: SIM_REG_ABI, functionName: 'registry' }); } catch {}
+  el.innerHTML = link(payrun, cname(payrun) + ' ' + short(payrun)) + (cname(payrun) === 'PayRunV3' && isAddr(reg) ? ` (vendors from Clerk's VendorRegistry ${link(reg, short(reg))})` : '');
+}
+const SIM_REG_ABI = parseAbi(['function registry() view returns (address)']);
+simLabel();
 $('#simNext').hidden = false;
 $('#simNext').addEventListener('click', simNext);

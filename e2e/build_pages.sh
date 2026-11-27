@@ -25,6 +25,10 @@ assert re.fullmatch(r'0x[0-9a-fA-F]{40}', a), 'payrun_v3 is not an address'
 p = 'docs/app.js'; s = open(p).read(); m = "const V3_PAGE = '';"
 assert s.count(m) == 1, 'V3_PAGE marker not found once'
 open(p, 'w').write(s.replace(m, f"const V3_PAGE = '{a}';"))
+# the walkthrough box names the contract it runs on (app.js re-labels it live with links; this is the no-JS text)
+p = 'docs/index.html'; s = open(p).read(); m = '<span id="simContract">PayRunV2</span>'
+assert s.count(m) == 1, 'simContract marker not found once'
+open(p, 'w').write(s.replace(m, '<span id="simContract">PayRunV3</span>'))
 PY
   python3 e2e/report_v2.py docs/report-v3.json --v3 ${V3_WITH:+--with "$V3_WITH"}
 else

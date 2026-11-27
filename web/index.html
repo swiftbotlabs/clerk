@@ -65,7 +65,7 @@ details.howto ol{margin:10px 0 4px;padding-left:20px}details.howto li{margin:0 0
 <li>A held payment: first call the vendor on a number you already had, tick the box, then Confirm payee. After that the run can be approved and paid.</li>
 </ol><p class="status">The page never holds a key and only sends to Clerk's two PayRun contracts. Without a wallet it is read-only.</p></details>
 <section id="sim" class="simbox" aria-labelledby="simh"><h2 id="simh" style="margin-top:0">Try the approval flow without a wallet</h2>
-<p>A <strong>simulation</strong> against the live PayRunV2 on Aevum testnet: each step is an <code>eth_call</code> made as the owner's address, so you see exactly what the contract would do (the owner's address also stands in for the clerk's staging key). Nothing is signed or sent, and nothing changes on chain.</p>
+<p>A <strong>simulation</strong> against the live <span id="simContract">PayRunV2</span> on Aevum testnet: each step is an <code>eth_call</code> made as the owner's address, so you see exactly what the contract would do (the owner's address also stands in for the clerk's staging key). Nothing is signed or sent, and nothing changes on chain.</p>
 <ol id="simSteps" class="simsteps"></ol>
 <div class="actions"><button id="simNext" class="pay" hidden>Start: the clerk stages a new vendor's first invoice</button></div>
 <p class="status" id="simNote" aria-live="polite"><noscript>The simulation needs JavaScript; the pay runs below are readable without it.</noscript></p></section>

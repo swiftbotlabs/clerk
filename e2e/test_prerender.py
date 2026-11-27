@@ -15,6 +15,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import os
+# these tests are about the PayRun / PayRunV2 render with a fake chain: no PayRunV3 pinned (the repo's e2e/testnet_v3page.json is
+# for the live build); the V3 case is test_v3_pinned_labels_earlier_contracts below
+os.environ["CLERK_V3PAGE"] = os.devnull + ".none"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import prerender  # noqa: E402
 
@@ -98,6 +102,21 @@ class Render(unittest.TestCase):
         self.assertIn("Registered wallet, on hold", text)
         # actionable runs first: the held V2 run comes before the paid v1 run
         self.assertLess(page.index("PayRunV2 run 1:"), page.index("PayRun run 3:"))
+
+    def test_v3_pinned_labels_earlier_contracts(self):
+        """r7b: once the page pins a PayRunV3, PayRun / PayRunV2 runs are labelled as history (control: unpinned, no label)."""
+        tmp = Path(tempfile.mkdtemp()) / "v3.json"
+        tmp.write_text(json.dumps({"payrun_v3": "0x1447B820a51bb83FC58fB13BF3b8c791361C682b", "registry": "0x428981983c3aa672c27ea5a469e2d0e37dc646a1"}))
+        old = prerender.V3PAGE
+        try:
+            prerender.V3PAGE = tmp
+            chain = FakeChain({(V2, 1): (1, NOW - 100)}, {(V2, 1): (False, 0, 2, NOW + 999)})
+            _, _, text = self.render(chain, [LOOKALIKE], [item(1, 1699, "Globex Logistics", "100000", "G-80", "test line")])
+            self.assertIn("PayRunV2 (earlier contract, history) run 1: Held", text)
+        finally:
+            prerender.V3PAGE = old
+        _, _, text = self.render(chain, [LOOKALIKE], [item(1, 1699, "Globex Logistics", "100000", "G-80", "test line")])
+        self.assertIn("PayRunV2 run 1: Held", text)
 
     def test_lookalike_alone_is_not_nothing_waiting(self):
         chain = FakeChain({(V1, 3): (2, NOW - 100)}, {})
