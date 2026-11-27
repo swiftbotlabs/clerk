@@ -286,14 +286,56 @@ def read_invoice(p: Path) -> tuple[bytes, str]:
     return raw, text
 
 
+# What triggers a source fallback: a value the model proposed that the document does not contain. The payer's PO/band check may also
+# have failed on the model's line (a model that swaps the vendor makes the OTHER vendor's PO check fail); the fallback line must pass
+# that check again on its own values, so it is allowed alongside, never alone.
+SOURCE_VALUE_CHECKS = frozenset({"vendor_in_document", "amount_in_document", "reference_in_document", "due_date_in_document"})
+FALLBACK_MAY_ALSO_FAIL = frozenset({"amount_as_expected"})
+
+
+def source_fallback(text: str, line: dict, v: Verdict, registry, policy: AmountPolicy | None) -> tuple[dict, Verdict] | None:
+    """r9: the model proposed a value the invoice does not contain (a compromised or confused extractor). Instead of holding a
+    genuine invoice for a human, re-read the SAME document with the deterministic rules extractor and run the FULL check on that
+    line. It is used only when:
+      * the model's line was HOLD (never BLOCK: a wrong payee, an unknown or look-alike vendor stays blocked or held),
+      * at least one failed check of the model's line is a value-not-in-document check (SOURCE_VALUE_CHECKS) and every other failed
+        check is the payer's amount expectation (re-run on the fallback line): no CLOSE_MATCH name, no look-alike name in the
+        document, no currency doubt,
+      * the rules line is PAYABLE with NO warnings (no redirect wallet printed, no instruction-like text in the document).
+    So a fallback line is exactly the line the rules-extractor pipeline stages for this document: it adds nothing an attacker could
+    not already get from the rules pipeline (measured: 0 wrong payments in every attack family). Downstream gates still apply to
+    it: pay-once key, PayRunV3 vendor signature over exactly these values, the session caps, and the contract's payee check.
+    Returns (line, verdict) to stage instead, or None (keep the model's verdict)."""
+    if v.decision != "HOLD" or v.cop != "MATCH":
+        return None
+    failed = {k for k, ok in v.checks.items() if not ok}
+    if not failed & SOURCE_VALUE_CHECKS or not failed <= SOURCE_VALUE_CHECKS | FALLBACK_MAY_ALSO_FAIL:
+        return None
+    rl = extract_rules(text)
+    rv = check_line(text, rl, registry, policy)
+    if rv.decision != "PAYABLE" or rv.warnings:
+        return None
+    diff = [k for k in ("vendor", "amount", "reference", "due_date") if str(line.get(k, "")).strip() != str(rl.get(k, "")).strip()]
+    rv.warnings.append("the extractor proposed " + ", ".join(f"{k} '{str(line.get(k, ''))[:40]}'" for k in diff)
+                       + " which the invoice does not contain; staged the invoice's own values instead (source fallback)")
+    return rl, rv
+
+
 def plan(chain: Chain, payrun: str | None, invoices: list[Path], directory: Directory, extractor: str,
-         policy: AmountPolicy | None = None) -> list[Planned]:
+         policy: AmountPolicy | None = None, fallback: bool | None = None) -> list[Planned]:
+    # source fallback: on for the model extractors (llm/json) unless CLERK_NO_SOURCE_FALLBACK=1 (the eval's before/after control)
+    if fallback is None:
+        fallback = extractor != "rules" and os.environ.get("CLERK_NO_SOURCE_FALLBACK") != "1"
     out = []
     seen: dict[str, str] = {}   # pay-once key -> first file in this batch
     for p in sorted(invoices):
         raw, text = read_invoice(p)
         line = extract_rules(text) if extractor == "rules" else extract_llm(text) if extractor == "llm" else extract_json(p)
         v: Verdict = check_line(text, line, directory.registry, policy)
+        if fallback:
+            fb = source_fallback(text, line, v, directory.registry, policy)
+            if fb:
+                line, v = fb
         h = keccak(raw)
         item = Planned(p.name, h, line, v.decision, v.cop, v.registered_name,
                        directory.ids.get(v.registered_name) if v.registered_name else None, v.reasons, v.warnings,
