@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 600" width="980" height="600" role="img" aria-labelledby="t d" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="t">Clerk architecture</title>
+  <desc id="d">Invoices go to an extractor that only proposes a line; check.py and stage.py decide off chain; the clerk key can only stage on PayRunV3, which checks the payee against the owner-curated VendorRegistry and the vendor's EIP-712 signature; only the owner's smart account can pay; Paid events are reconciled.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#3B4A5C"/></marker>
+    <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#B4232C"/></marker>
+    <style>
+      .box{fill:#FFFFFF;stroke:#9AA9BA;stroke-width:1.5}
+      .key{fill:#FFF6E5;stroke:#C98A1B;stroke-width:1.5}
+      .chain{fill:#EAF4EE;stroke:#1F7A4D;stroke-width:1.8}
+      .zone{fill:none;stroke:#C9D4E0;stroke-width:1.2;stroke-dasharray:5 5}
+      .h{font-size:15px;font-weight:700;fill:#1B2430}
+      .s{font-size:12.5px;fill:#3B4A5C}
+      .z{font-size:12px;font-weight:700;fill:#5A6676;letter-spacing:.06em}
+      .l{font-size:11.5px;fill:#3B4A5C}
+      .lr{font-size:11.5px;fill:#B4232C;font-weight:600}
+      .ln{stroke:#3B4A5C;stroke-width:1.5;fill:none}
+      .lnr{stroke:#B4232C;stroke-width:1.5;fill:none;stroke-dasharray:4 3}
+    </style>
+  </defs>
+  <rect width="980" height="600" fill="#F6F8FA"/>
+
+  <!-- zones -->
+  <rect class="zone" x="14" y="34" width="430" height="552" rx="12"/>
+  <text class="z" x="28" y="26">OFF CHAIN: THE CLERK MACHINE</text>
+  <rect class="zone" x="470" y="34" width="496" height="552" rx="12"/>
+  <text class="z" x="484" y="26">ON CHAIN: AEVUM TESTNET (the contracts decide)</text>
+
+  <!-- off-chain column -->
+  <rect class="box" x="34" y="52" width="180" height="58" rx="10"/>
+  <text class="h" x="48" y="76">Invoices</text>
+  <text class="s" x="48" y="96">email, text, PDF, CSV</text>
+
+  <rect class="key" x="244" y="52" width="180" height="58" rx="10"/>
+  <text class="h" x="258" y="76">Vendor</text>
+  <text class="s" x="258" y="96">EIP-712 over its invoice line</text>
+
+  <rect class="box" x="34" y="140" width="390" height="62" rx="10"/>
+  <text class="h" x="48" y="164">Extractor (LLM, no tools, no keys)</text>
+  <text class="s" x="48" y="186">proposes a line: vendor, wallet, amount, ref, due date</text>
+
+  <rect class="box" x="34" y="232" width="390" height="118" rx="10"/>
+  <text class="h" x="48" y="256">check.py (fail closed)</text>
+  <text class="s" x="48" y="278">every value must be in the document (source fallback: re-read it)</text>
+  <text class="s" x="48" y="297">payee = the vendor's registered wallet, or BLOCK</text>
+  <text class="s" x="48" y="316">look-alike name, injected text, odd wallet: HOLD</text>
+  <text class="s" x="48" y="335">payer's PO book / amount bands: HOLD on mismatch</text>
+
+  <rect class="box" x="34" y="380" width="250" height="100" rx="10"/>
+  <text class="h" x="48" y="404">stage.py</text>
+  <text class="s" x="48" y="425">pay-once key (vendor + invoice no.)</text>
+  <text class="s" x="48" y="444">vendor signature check (checkInvoice)</text>
+  <text class="s" x="48" y="463">pack under caps, simulate, send</text>
+
+  <rect class="box" x="300" y="380" width="124" height="100" rx="10"/>
+  <text class="h" x="312" y="404">Human queue</text>
+  <text class="s" x="312" y="425">HOLD and BLOCK</text>
+  <text class="s" x="312" y="444">lines: nothing</text>
+  <text class="s" x="312" y="463">staged</text>
+
+  <rect class="key" x="34" y="508" width="390" height="62" rx="10"/>
+  <text class="h" x="48" y="532">Clerk key (Kernel permission or session key)</text>
+  <text class="s" x="48" y="553">only stage / stageSigned, under caps; it can't pay</text>
+
+  <!-- on-chain column -->
+  <rect class="chain" x="492" y="140" width="452" height="196" rx="12"/>
+  <text class="h" x="508" y="166">PayRunV3</text>
+  <text class="s" x="508" y="190">stageSigned: payee = registry wallet  (PayeeNotRegistered)</text>
+  <text class="s" x="508" y="210">vendor signed exactly these values  (BadVendorSignature,</text>
+  <text class="s" x="508" y="228">  VendorSignatureRequired)</text>
+  <text class="s" x="508" y="248">session caps, expiry, revoke  (RunCapExceeded, DayCapExceeded ...)</text>
+  <text class="s" x="508" y="268">pay once  (AlreadyPaid, AlreadyStaged)</text>
+  <text class="s" x="508" y="288">execute (owner only): re-reads every payee, all or nothing;</text>
+  <text class="s" x="508" y="306">new or changed wallet held 3 days unless the owner confirms it</text>
+  <text class="s" x="508" y="324">(PaymentBlocked); a run older than 7 days can't pay</text>
+
+  <rect class="chain" x="492" y="52" width="452" height="58" rx="10"/>
+  <text class="h" x="508" y="76">VendorRegistry (owner-curated)</text>
+  <text class="s" x="508" y="96">ERC-8004 getAgentWallet; only the payer adds or re-points</text>
+
+  <rect class="key" x="492" y="380" width="452" height="100" rx="10"/>
+  <text class="h" x="508" y="404">Owner: Kernel v3.1 smart account (= treasury)</text>
+  <text class="s" x="508" y="425">approval page: every line with the invoice text behind each number</text>
+  <text class="s" x="508" y="444">execute / reject / confirmPayee, one UserOperation</text>
+  <text class="s" x="508" y="463">revoke the clerk key at any time</text>
+
+  <rect class="box" x="492" y="508" width="214" height="62" rx="10"/>
+  <text class="h" x="506" y="532">tUSD8 to the vendor</text>
+  <text class="s" x="506" y="553">Paid events only</text>
+
+  <rect class="box" x="730" y="508" width="214" height="62" rx="10"/>
+  <text class="h" x="744" y="532">reconcile.py</text>
+  <text class="s" x="744" y="553">Paid events vs the ledger</text>
+
+  <!-- arrows -->
+  <path class="ln" d="M124 110 V140" marker-end="url(#a)"/>
+  <path class="ln" d="M229 202 V232" marker-end="url(#a)"/>
+  <path class="ln" d="M150 350 V380" marker-end="url(#a)"/>
+  <text class="l" x="158" y="370">PAYABLE</text>
+  <path class="lnr" d="M362 350 V380" marker-end="url(#r)"/>
+  <text class="lr" x="370" y="370">HOLD / BLOCK</text>
+  <path class="ln" d="M244 81 H214" marker-end="url(#a)"/>
+  <text class="l" x="218" y="72">signs</text>
+  <path class="ln" d="M150 480 V508" marker-end="url(#a)"/>
+  <path class="ln" d="M424 539 H462 V238 H492" marker-end="url(#a)"/>
+  <text class="l" x="374" y="502" transform="rotate(0)">stageSigned</text>
+  <path class="ln" d="M718 110 V140" marker-end="url(#a)"/>
+  <text class="l" x="726" y="130">read at stage and at execute</text>
+  <path class="ln" d="M718 380 V336" marker-end="url(#a)"/>
+  <text class="l" x="726" y="362">execute / confirmPayee / reject</text>
+  <path class="ln" d="M492 320 H480 V539 H492" marker-end="url(#a)"/>
+  <text class="l" x="484" y="498" transform="rotate(-90 484 498)">Paid</text>
+  <path class="ln" d="M706 539 H730" marker-end="url(#a)"/>
+</svg>
