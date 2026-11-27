@@ -16,6 +16,7 @@ VARS=${SANDBOX_DEV_VARS:-work/dev.vars}     # another fork config (e.g. the PayR
 export WRANGLER_SEND_METRICS=false
 # local runs never bind Workers AI (no account calls from tests): a copy of the config without the [ai] block
 python3 -c "import re,sys;s=open('worker/wrangler.toml').read();t=re.sub(r'\n\[ai\]\nbinding = \"AI\"\n','\n',s);assert t!=s,'no [ai] block found';open('worker/wrangler.dev.toml','w').write(t)"
+: > "work/wrangler-$port.log"   # truncate NOW: the readiness grep below must not see a previous run's "Ready on" on a reused port
 setsid npx wrangler dev --config worker/wrangler.dev.toml --env-file "$(realpath "$VARS")" --var SANDBOX_DEV:1 "$@" \
   --ip 127.0.0.1 --port "$port" --persist-to "$persist" --show-interactive-dev-session=false > "work/wrangler-$port.log" 2>&1 &
 echo $! > "$pg"
