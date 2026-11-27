@@ -23,7 +23,8 @@ if (!/^\d{1,2}(\.\d{1,6})?$/.test(opt('--amount', '')) || !/^\d{1,2}(\.\d{1,6})?
 const amount = parseEther(opt('--amount')), keep = parseEther(opt('--keep', '0.20'));
 if (amount <= 0n || amount > parseEther('0.5')) die('--amount must be in (0, 0.5] tQDAY');
 const raw = JSON.parse(readFileSync(keysFile, 'utf8'));
-const k = (raw.keys || raw)[role];
+const ent = (raw.keys || raw)[role];
+const k = typeof ent === 'string' ? ent : (ent && (ent.private_key || ent.privateKey || ent.key)) || '';
 if (!/^0x[0-9a-fA-F]{64}$/.test(k || '')) die(`role ${role} not in the key file`);
 const acct = privateKeyToAccount(k);
 const chain = { id: 44005, name: 'aevum', nativeCurrency: { name: 'tQDAY', symbol: 'tQDAY', decimals: 18 }, rpcUrls: { default: { http: [rpc] } } };
