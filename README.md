@@ -231,7 +231,7 @@ The 160-invoice eval with every off-chain check bypassed (layer B), PayRunV2 vs 
 | Re-sent duplicate | 15 | 15 | 15 |
 | **All** | 130 | **95** | **130** |
 
-The PayRunV3 column is {V3_TESTNET_SOURCE}. The pipeline result is unchanged: 0 wrong payments, genuine 55/55 (rules) and 30/55
+The PayRunV3 column is the Aevum testnet run of 27 Nov 2026 ([TESTNET-EVAL-V3.md](e2e/adversarial/TESTNET-EVAL-V3.md), 289 transactions, `make judge-rerun-v3`). The pipeline result is unchanged: 0 wrong payments, genuine 55/55 (rules) and 30/55
 (hostile). Each refused line is tried both with the best signature the attacker holds (the vendor's real one that came with a real
 vendor's invoice, its own key for a fake one) and without a signature; it counts as refused only if the contract refuses both.
 
@@ -289,7 +289,7 @@ of Payee track) listed it on 17 Nov as "an ERC-8004-style identity registry ... 
 your own contract." Its `register()` is permissionless on chain, which is how our test vendors #1698/#1699 registered for PayRun and PayRunV2; those
 deployments and the 26 Nov PayRunV2 eval stay as published, against QDay's registry.
 
-**From PayRunV3 on, vendor identities live in our own registry contract {V3_REGISTRY}, as the starter kit asks; it exposes the ERC-8004
+**From PayRunV3 on, vendor identities live in our own registry contract 0x428981983c3aa672c27ea5a469e2d0e37dc646a1, as the starter kit asks; it exposes the ERC-8004
 `getAgentWallet` interface, so Clerk can point at QDay's registry the day it opens.** That contract is `contracts/src/VendorRegistry.sol`:
 the payer's vendor master file on chain. Only its owner (the payer) registers a vendor or changes its payout wallet, every change is an
 event, and a wallet change is exactly the payee change PayRunV2/V3's hold reacts to (tested with A -> B -> A in `VendorRegistry.t.sol`;
