@@ -10,7 +10,7 @@
 #   script/verify_explorer_v3.sh --status  # read-only: print the explorer's is_verified for each address
 #   STATE=<deploy state json> script/verify_explorer_v3.sh [--check|--status]
 #        the r7 deployments instead: sandbox/sandbox-testnet-v3.json (VendorRegistry + PayRunV3) or e2e/testnet_v3page.json
-#        (the page's PayRunV3), or a testnet_eval.mjs --payrun v3 state (its registry + both PayRunV3, r9b). Constructor args = the deploy tx input minus the repo's creation code, which must be its prefix.
+#        (the page's PayRunV3), or e2e/testnet_regv2.json (VendorRegistryV2 + PayeeChecker, r10), or a testnet_eval.mjs --payrun v3 state (its registry + both PayRunV3, r9b). Constructor args = the deploy tx input minus the repo's creation code, which must be its prefix.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 RPC=${AEVUM_RPC:-https://rpc-test.qday.info}
@@ -47,6 +47,9 @@ def row(addr, ctr, tx):
 row(st.get("registry") if st.get("registry_deploy_tx") else None, "src/VendorRegistry.sol:VendorRegistry", st.get("registry_deploy_tx"))
 if st.get("version") == "v3": row(st.get("payrun"), "src/PayRunV3.sol:PayRunV3", st.get("payrun_deploy_tx"))
 row(st.get("payrun_v3"), "src/PayRunV3.sol:PayRunV3", st.get("payrun_v3_deploy_tx"))
+# r10: e2e/deploy_registry_v2.sh state (VendorRegistryV2 + PayeeChecker)
+row(st.get("registry_v2"), "src/VendorRegistryV2.sol:VendorRegistryV2", st.get("registry_v2_deploy_tx"))
+row(st.get("payee_checker"), "src/PayeeCheck.sol:PayeeChecker", st.get("payee_checker_deploy_tx"))
 # r9b: a testnet_eval.mjs --payrun v3 state file (steps.deploy_registry / deploy_hostile / deploy_rules)
 for k, c in (("deploy_registry", "src/VendorRegistry.sol:VendorRegistry"), ("deploy_hostile", "src/PayRunV3.sol:PayRunV3"), ("deploy_rules", "src/PayRunV3.sol:PayRunV3")):
     d = (st.get("steps") or {}).get(k) or {}
