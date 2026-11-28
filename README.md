@@ -2,9 +2,16 @@
 
 **Accounts payable with an AI clerk that can't be talked into paying the wrong person.** Built on Aevum testnet (chain 44005) with tUSD8 and the ERC-8004 identity registry.
 
-**Contracts (canonical, Aevum testnet):** [PayRunV3](https://explorer-test.qday.info/address/0x1447B820a51bb83FC58fB13BF3b8c791361C682b) `0x1447B820a51bb83FC58fB13BF3b8c791361C682b` (the approval page's contract: payee checks, payee-change hold, vendor-signed invoices) + [VendorRegistry](https://explorer-test.qday.info/address/0x428981983c3aa672c27ea5a469e2d0e37dc646a1) `0x428981983c3aa672c27ea5a469e2d0e37dc646a1` (our vendor registry, ERC-8004 read interface). Both source-verified on the explorer (27 Nov 2026). The sandbox and the eval use their own PayRunV3 copies of the same source; every address is in [Deployments](#deployments-aevum-testnet-chain-44005); the earlier PayRun and PayRunV2 are in [History](#history-payrun-and-payrunv2).
+**The canonical set (Aevum testnet, chain 44005). Read these first; every other address in this repo is history or a sandbox copy:**
+- **[PayRunV3](https://explorer-test.qday.info/address/0x1447B820a51bb83FC58fB13BF3b8c791361C682b) `0x1447B820a51bb83FC58fB13BF3b8c791361C682b`**: the approval page's contract (payee checks, payee-change hold, vendor-signed invoices).
+- **[VendorRegistry](https://explorer-test.qday.info/address/0x428981983c3aa672c27ea5a469e2d0e37dc646a1) `0x428981983c3aa672c27ea5a469e2d0e37dc646a1`**: our vendor registry, ERC-8004 read interface.
+- **[Eval V3b](e2e/adversarial/TESTNET-EVAL-V3b.md)**: the published 160-invoice run on the same PayRunV3 source (its own copies: hostile extractor [`0x9b01…e1fe`](https://explorer-test.qday.info/address/0x9b017b4143b392931db1f7216111ab9c20bce1fe), rules extractor [`0x8168…ac0a`](https://explorer-test.qday.info/address/0x8168e1f3f3be2412a43c7ae7448293c12e26ac0a), registry [`0xecdb…db33`](https://explorer-test.qday.info/address/0xecdba028e8e94bd74e1d9c74f4b5e1561dccdb33)).
 
-**Trust model in one sentence:** the registry is owner-curated (only the payer adds a vendor or changes its wallet); vendor signatures and the payee-change hold protect against a compromised clerk, and the hold also covers a wallet change in the registry itself.
+All source-verified on the explorer (27 Nov 2026). The sandbox uses its own PayRunV3 copy; every address is in [Deployments](#deployments-aevum-testnet-chain-44005); PayRun and PayRunV2 are in [History](#history-payrun-and-payrunv2).
+
+**Who it is for:** a small accounts-payable team, say an AP clerk and a controller. The clerk forwards the day's vendor invoices to Clerk instead of keying them in; the controller opens the approval page once a day, sees every payment next to the invoice line behind it, and approves the run with one signature. A vendor registers its payout wallet once, through the payer (the registry owner), and signs each invoice with it; after that a "we have new bank details" email changes nothing on its own: the new wallet is held until the controller confirms it with the vendor on a number they already had.
+
+**Trust model in one sentence:** the registry is owner-curated (only the payer adds a vendor or changes its wallet); vendor signatures and the payee-change hold protect against a compromised clerk, and the hold also covers a wallet change in the registry itself. [VendorRegistryV2](#vendorregistryv2-a-48-hour-timelock-and-a-second-key-on-registry-changes) adds a brake on the registry owner too: every wallet change waits 48 hours in public and a second key can cancel it (tested, rehearsed on a fork; it deploys with the next testnet refresh, next to the canonical set).
 
 **Try it:** [sandbox](https://clerk-sandbox.swiftbotlab.workers.dev/) (attack the contract, refused on chain) · [approval page](https://clerk.swiftbotlab.workers.dev/) (a held payment + a no-wallet walkthrough; server-rendered, works without JavaScript) · [extractor demo](https://clerk-sandbox.swiftbotlab.workers.dev/extract?sample=injection) · demo video (3:01) https://youtu.be/WpnxGX7nYnM.
 
@@ -51,7 +58,8 @@ The sandbox numbers are its attack kinds; each is a real reverted transaction in
 | Re-sent copy (same file, reminder, re-typed number) | pay-once key = vendor + invoice number; copies in a batch skipped | `AlreadyPaid`, `AlreadyStaged` | eval: 15/15 never paid twice, B 15/15 refused; sandbox 6 and 13 |
 | Stolen, revoked or expired clerk key | the key never holds money; the owner revokes it | only the owner can `execute` (`NotOwner`); `SessionRevokedErr`, `SessionExpired`, `NoSession`; as a Kernel permission, ClerkStagePolicy refuses anything but `stage` | sandbox 7 to 10; [Kernel permission tests](#the-clerks-key-inside-the-smart-account-kernel-permission) |
 | Forged or edited vendor signature | `stage.py` checks the signature (`checkInvoice`) before staging | `VendorSignatureRequired`, `BadVendorSignature` (EIP-712 by the registered wallet over agentId, payee, amount, invoice hash, due date) | B: 52 lines refused with `BadVendorSignature` (8 + 9 + 25 + 10 above); sandbox 15 to 17 |
-| Vendor wallet swapped in the registry (after staging, before a new invoice, or A to B to A) | the approval page shows the hold and the changed wallet | `execute` re-reads the registry: a run whose payee changed is closed (`PaymentBlocked` 3); a new or changed wallet is held 3 days unless the owner confirms it (`PaymentBlocked` 1) | eval layer C: 3 of 3 swaps, nothing paid ([C](e2e/adversarial/TESTNET-EVAL-V3b.md#c-vendor-wallet-swaps-in-the-vendor-registry-the-record-changed-after-a-new-bank-details-request-rubber-stamp-owner-executes)); sandbox 11 and 12 |
+| Vendor wallet swapped in the registry (after staging, before a new invoice, or A to B to A) | the approval page shows the hold and the changed wallet | `execute` re-reads the registry: a run whose payee changed is closed (`PaymentBlocked` 3); a new or changed wallet is held (24 h on the approval page's contract, 3 days in the sandbox) unless the owner confirms it (`PaymentBlocked` 1) | eval layer C: 3 of 3 swaps, nothing paid ([C](e2e/adversarial/TESTNET-EVAL-V3b.md#c-vendor-wallet-swaps-in-the-vendor-registry-the-record-changed-after-a-new-bank-details-request-rubber-stamp-owner-executes)); sandbox 11 and 12 |
+| Stolen registry owner key (the attacker re-points a vendor in the registry itself) | the approval page shows the change and the hold; the owner must confirm a new wallet before it is paid | VendorRegistry today: the change lands at once, then PayRunV3's hold and owner confirmation above still block payment. [VendorRegistryV2](#vendorregistryv2-a-48-hour-timelock-and-a-second-key-on-registry-changes): the change only applies after 48 h in public (`TooEarly`), the verifier key can cancel it or suspend the vendor at once, and the owner can't remove the verifier | unit tests 12/12 + 8 planted mutants red; fork rehearsal of deploy, redirect proposed, verifier cancel (`r10`); not yet on testnet |
 
 ## Deployments (Aevum testnet, chain 44005)
 Every contract Clerk deployed, and the two it only reads. "Source verified" is what the explorer's API said when we read it (`GET /api/v2/smart-contracts/<address>`, 27 Nov 2026); `contracts/script/verify_explorer.sh` verified the first three, `contracts/script/verify_explorer_v3.sh` submits the rest.
@@ -85,6 +93,35 @@ Clerk was built in three steps; the earlier contracts stay on chain and on the a
 - **PayRunV2 (22 Nov):** PayRun plus the [payee-change hold](#payee-change-hold-payrunv2). Its 26 Nov testnet eval of the same 160 invoices: 0 wrong payments, 247 transactions; 95 of 130 attack lines refused on chain and the other 35 (look-alikes, model edits, document-edited amounts) stopped off chain, which is what PayRunV3's vendor signatures moved on chain ([TESTNET-EVAL.md](e2e/adversarial/TESTNET-EVAL.md), `make judge-rerun`; [first 16-invoice slice](e2e/adversarial/TESTNET-EVAL-16.md)). The PayRunV2 public sandbox (25-27 Nov) keeps its log at [/history/v2](https://clerk-sandbox.swiftbotlab.workers.dev/history/v2).
 - **PayRunV3 (27 Nov):** PayRunV2 plus [vendor-signed invoices](#vendor-signed-invoices-payrunv3), reading vendors from our own VendorRegistry, because the starter kit now says QDay's registry "isn't open for this challenge" ([why](#aevum-testnet)). PayRun and PayRunV2 results stay as published, against QDay's registry.
 
+## VendorRegistryV2: a 48-hour timelock and a second key on registry changes
+The registry is the payer's vendor master file, so its owner key is the last single point of failure: in VendorRegistry a stolen owner key can re-point a vendor in one transaction. PayRunV3 already refuses to pay that new wallet until its hold runs out or the owner confirms it, but the registry itself had no brake. [`contracts/src/VendorRegistryV2.sol`](contracts/src/VendorRegistryV2.sol) adds one, with the same ERC-8004 read side (PayRunV3 points at it unchanged):
+- **Two steps, in public.** A new vendor's wallet, a wallet change and a new owner are *proposed* (event + `pendingWallet(agentId)`), and can only be *applied* 48 hours later (fixed at deploy, 1 hour to 7 days). Until then the registry keeps answering the old wallet (a new vendor reads as zero, which every PayRun refuses).
+- **A second key.** The *verifier* (an AP lead or an outside controller, never the owner) can cancel any pending change, and can suspend a vendor at once (the safe direction; it also cancels the pending change). It can never add a vendor or set a wallet. Only the verifier hands its role on, so a stolen owner key can't remove the check.
+- **Then the PayRun hold.** A change that does land is still a payee change for PayRunV3: held, or confirmed by the owner. Two brakes in sequence.
+
+Tests: `contracts/test/VendorRegistryV2.t.sol` (12, one fuzzed: no apply before the delay for any time), including a stolen-owner-key redirect cancelled in the window and an uncancelled change still blocked by PayRunV3's hold. Planted control: the v1 one-step change (and 7 other mutants: no timelock, owner sets the verifier, verifier can't cancel, suspension keeps the pending change, registration applies at once, and three PayeeCheck mutants) each turn the suite red. Fork rehearsal on a local fork of Aevum testnet: `sandbox/deploy_registry_v2.mjs` deploys it with PayeeChecker, registers Acme (pending for 48 h; an early apply reverts), and after 48 h applies it, proposes a "new bank details" wallet (PayeeChecker: ChangePending), and the verifier cancels it. **Status:** tested and rehearsed; it deploys on testnet with the next refresh as a demonstrator next to the canonical set. The canonical PayRunV3 keeps reading VendorRegistry `0x4289…46a1`, because the published eval and the approval page's runs are bound to it; a production payer would deploy PayRunV3 on VendorRegistryV2 from day one.
+
+## Use Clerk's payee check in your app
+Any Aevum app that pays an ERC-8004 identity can reuse Clerk's Confirmation of Payee: [`contracts/src/PayeeCheck.sol`](contracts/src/PayeeCheck.sol) is a small MIT library (no storage, no owner) that answers, for an `agentId` and the address you are about to pay:
+`Ok`, `Unregistered` (no wallet, or suspended), `Mismatch` (not the registered wallet), `ChangePending` (VendorRegistryV2 has a wallet change waiting) or `Held` (optional hold source, e.g. a PayRunV3, says the wallet is still on hold). It works with QDay's ERC-8004 registry, VendorRegistry and VendorRegistryV2 (a registry without `pendingWallet` simply never reports ChangePending; a malformed or gas-burning answer is ignored, tested). `PayeeChecker` wraps it in one external view for scripts that want a single `eth_call`.
+
+```solidity
+// forge install swiftbotlabs/clerk
+import {IAgentIdentity} from "clerk/contracts/src/PayRun.sol";
+import {PayeeCheck, IPayeeHold} from "clerk/contracts/src/PayeeCheck.sol";
+
+contract Escrow {
+    using PayeeCheck for IAgentIdentity;
+    IAgentIdentity public immutable registry; IPayeeHold public immutable hold;   // hold: a PayRunV3, or address(0)
+    constructor(IAgentIdentity r, IPayeeHold h) { registry = r; hold = h; }
+    function release(uint256 sellerAgentId, address to, uint256 amount) external {
+        registry.requireOk(hold, sellerAgentId, to);   // reverts PayeeCheckFailed(agentId, to, verdict, registered)
+        // ... transfer `amount` to `to`
+    }
+}
+```
+This exact contract is `ExampleEscrow` in [`contracts/test/PayeeCheck.t.sol`](contracts/test/PayeeCheck.t.sol) (6 tests: every verdict, VendorRegistry v1 and v2, a plain ERC-8004 registry, broken registries, PayRunV3 as the hold source, the example). Note for hold sources: PayRunV3 counts a registry change it has not yet recorded as a hold starting now, so call its `observePayee(agentId)` once after a change if you want the hold clock to run.
+
 ## What is in the repo
 | Path | What it does |
 |---|---|
@@ -94,6 +131,8 @@ Clerk was built in three steps; the earlier contracts stay on chain and on the a
 | `contracts/test/PayRunV2*.t.sol` | 38 tests for PayRunV2: the 19 above re-run against it, plus 19 for the hold (4 fuzzed, including A to B to A) |
 | `contracts/src/PayRunV3.sol` | PayRunV2 plus **vendor-signed invoices** (below): for a vendor marked `signedOnly`, a line is staged only with the vendor's EIP-712 signature over exactly its values. Every PayRunV2 test passes on it unchanged (`test/v3compat`) |
 | `contracts/src/VendorRegistry.sol` | Our own vendor registry (the kit: "keep the name-to-address mapping in your own contract"): ERC-8004 `getAgentWallet` / `tokenURI` reads, owner-curated writes with events. PayRunV3 points at it |
+| `contracts/src/VendorRegistryV2.sol` | VendorRegistry with a 48-hour public timelock on every wallet and owner change and a verifier key that can cancel or suspend ([above](#vendorregistryv2-a-48-hour-timelock-and-a-second-key-on-registry-changes)); deploy and demo: `sandbox/deploy_registry_v2.mjs` |
+| `contracts/src/PayeeCheck.sol` | Clerk's payee check as a reusable library + `PayeeChecker` view ([above](#use-clerks-payee-check-in-your-app)) |
 | `contracts/script/sig_controls.sh` | Revert control for the signature check: 9 broken versions, each must turn the tests red |
 | `contracts/script/hold_controls.sh` | Revert control: switches each hold rule off in turn, expects tests to fail, restores the source byte for byte, expects all green |
 | `contracts/script/match_onchain.py` | Shows the deployed PayRun is this source: compiles it, reads the runtime bytecode from the chain, compares byte for byte (metadata hash included) |
@@ -397,4 +436,4 @@ Third-party work this project uses, with its license:
 - **Cloudflare Turnstile** on the hosted demos (Cloudflare's terms of service).
 - Network facts from the Aevum Starter Kit docs (MIT, PQA Labs).
 
-The same list, with copyright lines, is in [NOTICE](NOTICE); PayRunV3 and VendorRegistry add no third-party code. Clerk itself is MIT licensed (`LICENSE`).
+The same list, with copyright lines, is in [NOTICE](NOTICE); PayRunV3, VendorRegistry, VendorRegistryV2 and PayeeCheck add no third-party code. Clerk itself is MIT licensed (`LICENSE`).
